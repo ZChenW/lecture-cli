@@ -1,0 +1,204 @@
+import json
+import os
+from pathlib import Path
+import subprocess
+import sys
+import signal
+import time
+
+import numpy as np
+import pytest
+
+from lecture_cli import refinement, final_notes
+from lecture_cli.storage import Journal, events, final_events, read_json, write_json
+from lecture_cli.worker import APIError
+
+
+def session(root):
+    write_json(root / "session.json", dict(course="MATH421", started="today", model="deepseek-flash",
+               output=str(root / "notes.md"), refine=True, language="en"))
+    (root / "transcript.jsonl").write_text(json.dumps(dict(id=1, start="00:00:00", end="00:01:01",
+                                                         text="24 AC live error")) + "\n")
+
+
+def test_offline_segments_cover_every_sample_without_overlap_and_include_tail(tmp_path):
+    pcm = np.tile(np.arange(100, 500, dtype="<i2"), 2440).tobytes()  # 61 seconds
+    path = tmp_path / "audio.pcm"
+    path.write_bytes(pcm)
+    chunks = list(refinement.segments(path))
+    assert b"".join(part[2] for part in chunks) == pcm
+    assert chunks[0][0] == 0
+    assert chunks[-1][1] == 61
+    assert all(a[1] == b[0] for a, b in zip(chunks, chunks[1:]))
+    assert all(0 < end - start <= 30 for start, end, _ in chunks)
+
+
+def test_archive_limit_falls_back_without_breaking_recording(tmp_path, monkeypatch):
+    monkeypatch.setattr(refinement, "MAX_ARCHIVE_BYTES", 8)
+    archive = refinement.AudioArchive(tmp_path)
+    archive.append(b"a" * 8)
+    archive.append(b"b" * 8)
+    archive.close()
+    assert read_json(tmp_path / "archive.json")["error"]
+    assert (tmp_path / "refinement.pcm").read_bytes() == b"a" * 8
+
+
+def test_archive_manifest_failure_does_not_interrupt_capture_cleanup(tmp_path, monkeypatch):
+    archive = refinement.AudioArchive(tmp_path)
+    def no_space(*args):
+        raise OSError("disk full")
+    monkeypatch.setattr(refinement, "write_json", no_space)
+    archive.close()
+    assert archive.error
+    assert archive.file.closed
+
+
+@pytest.mark.parametrize("records", [[], [{"id": 1}], [{"id": 2, "text": "bad"}]])
+def test_invalid_offline_source_falls_back_without_mislabeling(tmp_path, records):
+    session(tmp_path)
+    write_json(tmp_path / "refinement-state.json", {"complete": True, "count": len(records)})
+    (tmp_path / "refined.jsonl").write_text("".join(json.dumps(r) + "\n" for r in records))
+    assert final_events(tmp_path) == events(tmp_path)
+    journal = Journal(tmp_path)
+    journal.render()
+    journal.close()
+    assert "依据 Qwen" not in (tmp_path / "notes.md").read_text()
+
+
+def test_corrected_source_reaches_final_notes_and_controller_recovery(tmp_path):
+    session(tmp_path)
+    archive = refinement.AudioArchive(tmp_path)
+    archive.append(np.full(16000 * 31, 100, dtype="<i2").tobytes())
+    archive.close()
+    assert refinement.refine(tmp_path, lambda pcm: "minus four ac corrected") == 0
+    assert "24 AC" in events(tmp_path)[0]["text"]
+    assert len(final_events(tmp_path)) == 2
+    journal = Journal(tmp_path)
+    calls = []
+    def api(messages, model, tokens):
+        calls.append(messages[-1]["content"])
+        raise APIError('offline')
+    final_notes.generate(journal, final_events(tmp_path), api)
+    journal.preserve_detail_tail()
+    journal.render(finished=True)
+    assert "24 AC" not in calls[0]
+    assert "minus four ac corrected" in calls[0]
+    assert "minus four ac corrected" in (tmp_path / "notes.transcript.md").read_text()
+    assert "编号独立" in (tmp_path / "notes.md").read_text()
+    journal.close()
+
+
+def test_failed_late_segment_cannot_publish_partial_replacement(tmp_path):
+    session(tmp_path)
+    archive = refinement.AudioArchive(tmp_path)
+    archive.append(np.full(31 * 16000, 100, dtype="<i2").tobytes())
+    archive.close()
+    count = 0
+    def transcribe(pcm):
+        nonlocal count
+        count += 1
+        if count == 2:
+            raise RuntimeError("failure")
+        return "good first part"
+    assert refinement.refine(tmp_path, transcribe) == 1
+    assert final_events(tmp_path) == events(tmp_path)
+    assert not (tmp_path / "refined.jsonl").exists()
+
+
+def test_non_silent_empty_result_is_failure(tmp_path):
+    session(tmp_path)
+    archive = refinement.AudioArchive(tmp_path)
+    archive.append(np.full(16000, 1000, dtype="<i2").tobytes())
+    archive.close()
+    assert refinement.refine(tmp_path, lambda pcm: "") == 1
+    assert "24 AC" in final_events(tmp_path)[0]["text"]
+
+
+@pytest.mark.parametrize("mode", ["success", "failure", "cancel"])
+def test_real_controller_waits_for_refine_and_cleans_audio(tmp_path, mode):
+    fail = mode != "success"
+    root = Path(__file__).resolve().parents[1]
+    shim = tmp_path / "shim"
+    shim.mkdir()
+    (shim / "sitecustomize.py").write_text('''
+import sys, json, os
+from pathlib import Path
+from lecture_cli import cli
+cli.capture_python = lambda model: sys.executable
+if "_capture" in sys.argv:
+    from lecture_cli import capture
+    from lecture_cli.storage import write_json
+    def capture_run(directory):
+        from lecture_cli.refinement import AudioArchive
+        a = AudioArchive(directory)
+        a.append(b"\\0" * 32000)
+        a.close()
+        capture.Transcript(directory).append("LIVE_SOURCE", 0, 1)
+        write_json(directory / "asr-state.json", {"status": "转录完成"})
+        return 0
+    capture.run = capture_run
+if "_refine" in sys.argv:
+    from lecture_cli import refinement
+    def refine(directory):
+        assert "DEEPSEEK_API_KEY" not in os.environ
+        assert (directory / "refinement.pcm").exists()
+        if os.environ.get("REFINE_TEST_CANCEL"):
+            import time
+            Path(os.environ["REFINE_TEST_CANCEL"]).touch()
+            while True:
+                time.sleep(0.1)
+        if os.environ.get("REFINE_TEST_FAIL"):
+            return 1
+        from lecture_cli.storage import write_json
+        records = [{"id": 1, "start": "00:00:00", "end": "00:00:01", "text": "CORRECTED_SOURCE"}]
+        (directory / "refined.jsonl").write_text(json.dumps(records[0]) + "\\n")
+        write_json(directory / "refinement-state.json", {"complete": True, "count": 1})
+        return 0
+    refinement.refine = refine
+if "_worker" in sys.argv:
+    from lecture_cli import worker
+    def complete(messages, model, max_tokens=2000):
+        source = "LIVE_SOURCE" if max_tokens == 2000 or os.environ.get("REFINE_TEST_FAIL") else "CORRECTED_SOURCE"
+        assert source in messages[-1]["content"]
+        if max_tokens == 4000:
+            return json.dumps({"continues_previous": False, "topics": [
+                {"title": "测试主题", "question": "结论是什么？", "first": 1, "last": 1}]})
+        body = source + " [L1]"
+        return json.dumps({"body": body, "review": ""}) if max_tokens == 8000 else body
+    worker.complete = complete
+''')
+    courses = tmp_path / "courses"
+    (courses / "MATH421").mkdir(parents=True)
+    env = dict(os.environ, PYTHONPATH=f"{shim}:{root}", XDG_CONFIG_HOME=str(tmp_path / "config"),
+               DEEPSEEK_API_KEY="test-not-real")
+    if fail:
+        env["REFINE_TEST_FAIL"] = "1"
+    marker = tmp_path / "refine.started"
+    if mode == "cancel":
+        env["REFINE_TEST_CANCEL"] = str(marker)
+    process = subprocess.Popen([sys.executable, "-m", "lecture_cli", "--courses-dir", str(courses),
+                                "start", "MATH421", "--refine"], env=env,
+                               stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    try:
+        if mode == "cancel":
+            deadline = time.monotonic() + 10
+            while not marker.exists() and process.poll() is None and time.monotonic() < deadline:
+                time.sleep(0.05)
+            assert marker.exists()
+            process.send_signal(signal.SIGINT)
+        stdout, stderr = process.communicate(timeout=25)
+        assert process.returncode == 0, stdout + stderr
+    finally:
+        if process.poll() is None:
+            process.kill()
+            process.wait()
+    note_path = next(p for p in (courses / "MATH421" / "LectureNotes").glob("*.md")
+                     if not p.stem.endswith((".live", ".review", ".transcript")))
+    note = note_path.read_text()
+    assert "LIVE_SOURCE" in note_path.with_suffix('.transcript.md').read_text()
+    assert ("CORRECTED_SOURCE" in note) is not fail
+    assert (refinement.WARNING in note) is fail
+    if mode == "cancel":
+        assert "用户跳过" in note_path.with_suffix('.review.md').read_text()
+    for directory in Path("/tmp").glob(f"lecture-{os.getuid()}-*"):
+        assert str(courses) not in str(read_json(directory / "session.json"))

@@ -1,0 +1,31 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "lecture-cli"
+version = "0.1.0"
+description = "Local lecture transcription and DeepSeek notes"
+requires-python = ">=3.11,<3.14"
+dependencies = [
+  "rich>=13,<15",
+  "httpx>=0.27,<1",
+  "sounddevice>=0.5,<1",
+  "numpy>=1.26,<3",
+]
+
+[project.scripts]
+lecture = "lecture_cli.cli:main"
+
+[project.optional-dependencies]
+local = ["whisperlivekit @ git+https://github.com/QuentinFuxa/WhisperLiveKit.git@363e4f6d029694d9c81ae548beddd9d3c88a3637"]
+gpu = ["nvidia-cublas-cu12>=12,<13", "nvidia-cudnn-cu12>=9,<10"]
+
+[tool.setuptools.package-data]
+lecture_cli = ["completions/_lecture"]
+
+[tool.setuptools.packages.find]
+include = ["lecture_cli*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

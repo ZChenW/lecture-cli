@@ -1,0 +1,90 @@
+#compdef lecture
+
+_lecture() {
+  local context state state_descr line
+  local -A opt_args
+  local root command_name
+  local -a commands courses models common
+  commands=(
+    'start:选择课程并录制'
+    'courses:列出课程'
+    'models:选择并保存默认语音模型'
+    'doctor:检查运行环境'
+    'prepare:提前下载语音模型'
+    'setup:配置目录、语音模型、麦克风和 API key'
+    'devices:列出麦克风'
+    'diagnose-asr:录制同一段音频并对比两个语音模型'
+    'demo:使用自造文字生成演示笔记'
+  )
+  _arguments -C \
+    '(-h --help)'{-h,--help}'[显示帮助]' \
+    '--courses-dir[课程根目录]:目录:_files -/' \
+    '1:子命令:->command' \
+    '*::参数:->args' && return
+  case $state in
+    command) _describe 'lecture 子命令' commands; return ;;
+    args)
+      root=${(Q)opt_args[--courses-dir]}
+      command_name=$line[1]
+      common=('(-h --help)'{-h,--help}'[显示帮助]')
+      case $command_name in
+        start)
+          _arguments -C $common \
+            '--asr-backend[采集后端]:后端:(local api)' \
+            '--asr-api-model[云端转录模型]:模型:' \
+            '--asr-device[语音识别设备]:设备:(auto cuda cpu)' \
+            '--asr-model[语音模型]:模型:->asr_model' \
+            '--language[课堂语言]:语言:(en zh auto)' \
+            '--device[麦克风编号或名称]:麦克风:' \
+            '--interval[笔记检查间隔]:秒数:(30 60 90 120)' \
+            '--context[课程背景文件]:文件:_files' \
+            '--audio-file[使用已有音频]:音频文件:_files' \
+            '--fast[尽快处理已有音频]' \
+            '(--no-refine)--refine[课后 Qwen 离线校正，临时保留音频]' \
+            '(--refine)--no-refine[关闭课后离线校正]' \
+            '1:课程:->course'
+          ;;
+        demo)
+          _arguments -C $common \
+            '--interval[笔记检查间隔]:秒数:(30 60 90 120)' \
+            '--context[课程背景文件]:文件:_files' \
+            '1:课程:->course'
+          ;;
+        prepare)
+          _arguments -C $common '--asr-model[语音模型]:模型:->asr_model'
+          ;;
+        doctor)
+          _arguments -C $common '--asr-backend[采集后端]:后端:(local api)' '--asr-device[检查指定识别设备]:设备:(auto cuda cpu)' '--asr-model[语音模型]:模型:->asr_model'
+          ;;
+        diagnose-asr)
+          _arguments -C $common \
+            '--seconds[采样时长]:秒数:(30 45 60)' \
+            '--model-a[第一个语音模型]:模型:->asr_model' \
+            '--model-b[第二个语音模型]:模型:->asr_model' \
+            '--asr-device[语音识别设备]:设备:(auto cuda cpu)' \
+            '--language[音频语言]:语言:(en zh auto)' \
+            '--device[麦克风编号或名称]:麦克风:' \
+            '--context[课程背景文件]:文件:_files' \
+            '--audio-file[使用已有音频]:音频文件:_files' \
+            '--keep-audio[保留截取后的诊断音频]' \
+            '--fast[尽快重放已有音频]' \
+            '1:课程:->course'
+          ;;
+        *) _arguments $common ;;
+      esac
+      if [[ $state == course ]]; then
+        if [[ -n $root ]]; then
+          courses=("${(@f)$(command lecture _complete-courses "$root" 2>/dev/null)}")
+        else
+          courses=("${(@f)$(command lecture _complete-courses 2>/dev/null)}")
+        fi
+        compadd -a courses
+      elif [[ $state == asr_model ]]; then
+        models=("${(@f)$(command lecture _complete-asr-models 2>/dev/null)}")
+        compadd -a models
+      fi
+      ;;
+  esac
+}
+
+_lecture "$@"
