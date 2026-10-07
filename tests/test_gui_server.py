@@ -24,7 +24,7 @@ import uvicorn
 from lecture_cli import runs
 from lecture_cli.checks import Check
 from lecture_cli.gui import server as gui_server
-from lecture_cli.gui.sessions import Sessions, TranscriptTail, command, snapshot
+from lecture_cli.gui.sessions import Sessions, TranscriptTail, command, records, snapshot
 
 ROOT = Path(__file__).resolve().parents[1]
 TOKEN = "test-token-" + "x" * 32
@@ -481,6 +481,7 @@ def test_snapshot_tolerates_missing_and_partial_state_files(tmp_path):
     assert empty["transcript"] == {"count": 0, "tail": [], "pending": ""}
     assert empty["notes"]["worker_alive"] is None and empty["notes"]["latest"] is None
     assert empty["refine"] == {"enabled": False, "status": None, "reason": None} and empty["stages"] == []
+    assert empty["phase_since"] is None and empty["input"] == "系统默认"
 
     write_state(tmp_path, "session.json", "{\"course\": ")
     (tmp_path / "asr-state.json").write_bytes(b"\xff\xfe")
@@ -499,7 +500,8 @@ def test_snapshot_tolerates_missing_and_partial_state_files(tmp_path):
                                              "pending": "then sum", "buffer": "them up", "gain_notice": "削波",
                                              "seconds": 61.7, "error": ""})
     write_state(tmp_path, "notes-state.json", {"cursor": 2, "status": "已更新"})
-    write_state(tmp_path, "controller-state.json", {"phase": "refining", "can_skip": True, "stages": [{"name": "录制与转录"}]})
+    write_state(tmp_path, "controller-state.json", {"phase": "refining", "can_skip": True, "since": 1760000000.5,
+                                                    "stages": [{"name": "录制与转录"}]})
     (tmp_path / "notes.sqlite").unlink()
     with sqlite3.connect(tmp_path / "notes.sqlite") as db:
         db.execute("CREATE TABLE batches (first_id INTEGER PRIMARY KEY, last_id INTEGER, body TEXT, fallback INTEGER)")
@@ -517,6 +519,27 @@ def test_snapshot_tolerates_missing_and_partial_state_files(tmp_path):
     assert full["notes"] | {"updated": None} == {"status": "已更新", "worker_alive": False, "unprocessed_segments": 3,
                                                  "updated": None, "latest": "latest body"}
     assert full["refine"]["status"] == "Qwen 1.7B · 下课后自动重转录"
+    assert full["phase_since"] == 1760000000.5 and full["input"] == "系统默认"
+    for meta, label in (({"device": "pipewire"}, "pipewire"), ({"device": 3}, "3"), ({"demo": True}, "演示输入"),
+                        ({"audio_file": "/a/lecture one.flac", "device": "x"}, "音频文件 · lecture one.flac")):
+        write_state(tmp_path, "session.json", meta)
+        assert snapshot(tmp_path)["input"] == label
+
+
+def test_failed_final_record_carries_the_controller_log_tail(isolated_run_registry, tmp_path):
+    isolated_run_registry.mkdir(parents=True)
+    log = isolated_run_registry / "2026-10-07_143000-controller.log"
+    log.write_text("".join(f"line {i}\n" for i in range(1, 31)))
+    outside = tmp_path / "elsewhere.log"
+    outside.write_text("private\n")
+    sessions = Sessions(reap=lambda: None)
+    active = {"run_id": "r1", "directory": tmp_path, "pid": None}
+    for log_path, tail in ((log, "\n".join(f"line {i}" for i in range(11, 31))), (outside, "")):
+        runs.write_json(runs.record_path("r1"), {"run_id": "r1", "status": "failed", "exit_code": 1, "log": str(log_path)})
+        assert sessions.final_record(active)["log_tail"] == tail
+        assert records()[0]["log_tail"] == tail
+    runs.write_json(runs.record_path("r1"), {"run_id": "r1", "status": "done", "log": str(log)})
+    assert "log_tail" not in sessions.final_record(active)
 
 
 def test_transcript_tail_reads_incrementally_and_follows_replacement(tmp_path):

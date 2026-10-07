@@ -26,4 +26,13 @@ describe("renderMarkdown", () => {
     expect(broken).toContain("公式无法渲染");
     expect(broken).toContain("\\frac{1");
   });
+
+  it("styles source references and flags 待核对 lines", () => {
+    const html = renderMarkdown("- 特征向量非零 [L212]\n- 待核对：符号约定 [L3–L5, L8]\n\n待核对：板书未出现\n\n[链接](https://x.example) [L]");
+    expect(html).toContain('<span class="citation">[L212]</span>');
+    expect(html).toContain('<span class="citation">[L3–L5, L8]</span>');
+    expect(html).toContain('<li class="review">待核对：符号约定');
+    expect(html).toContain('<p class="review">待核对：板书未出现</p>');
+    expect(html).toContain('<a href="https://x.example">链接</a> [L]');
+  });
 });

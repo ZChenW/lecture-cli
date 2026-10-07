@@ -41,8 +41,34 @@ function blockMath(state: StateBlock, startLine: number, endLine: number, silent
   return true;
 }
 
+// Source references such as [L12] or [L3–L5, L8]: quiet metadata, not prose.
+const CITATION = /^\[L\d+(?:\s*[–-]\s*L?\d+)?(?:\s*[,，、]\s*L\d+(?:\s*[–-]\s*L?\d+)?)*\]/;
+
+function citation(state: StateInline, silent: boolean): boolean {
+  if (state.src[state.pos] !== "[") return false;
+  const match = state.src.slice(state.pos).match(CITATION);
+  if (!match) return false;
+  if (!silent) state.push("citation", "span", 0).content = match[0];
+  state.pos += match[0].length;
+  return true;
+}
+
+// Lines the notes model flags as uncertain ("待核对：…") are styled apart from the notes.
+function flagReview(state: { tokens: { type: string; content: string; hidden: boolean; attrJoin(n: string, v: string): void }[] }) {
+  state.tokens.forEach((token, index) => {
+    if (token.type !== "inline" || !token.content.trimStart().startsWith("待核对")) return;
+    const paragraph = state.tokens[index - 1];
+    const item = state.tokens[index - 2];
+    if (paragraph?.hidden && item?.type === "list_item_open") item.attrJoin("class", "review");
+    else if (paragraph?.type === "paragraph_open") paragraph.attrJoin("class", "review");
+  });
+}
+
 const markdown = new MarkdownIt({ html: true, linkify: false });
 markdown.inline.ruler.after("escape", "math_inline", inlineMath);
+markdown.inline.ruler.before("link", "citation", citation);
+markdown.core.ruler.push("review", flagReview);
+markdown.renderer.rules.citation = (tokens, index) => `<span class="citation">${escape(tokens[index].content)}</span>`;
 markdown.block.ruler.before("fence", "math_block", blockMath);
 markdown.renderer.rules.math_inline = (tokens, index) => math(tokens[index].content, false);
 markdown.renderer.rules.math_block = (tokens, index) => `<div class="math-block">${math(tokens[index].content, true)}</div>`;

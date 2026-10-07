@@ -120,6 +120,16 @@ def device_label(asr: dict, meta: dict):
     return "云端 API" if device == "api" else f"NVIDIA GPU · {precision}" if device == "cuda" else "CPU"
 
 
+def input_label(meta: dict) -> str:
+    """What the lecture is listening to, for the recording screen's header."""
+    if meta.get("demo"):
+        return "演示输入"
+    if isinstance(meta.get("audio_file"), str):
+        return "音频文件 · " + Path(meta["audio_file"]).name
+    device = meta.get("device")
+    return "系统默认" if device in (None, "") else str(device)
+
+
 def snapshot(directory: Path, cache: SnapshotCache | None = None) -> dict:
     """The only session shape the frontend depends on; field meanings follow cli.display()."""
     cache = cache or SnapshotCache()
@@ -140,6 +150,9 @@ def snapshot(directory: Path, cache: SnapshotCache | None = None) -> dict:
         "output": output,
         "started": meta.get("started"),
         "phase": controller.get("phase") or "starting",
+        # Wall-clock start of the current phase; the closing screen times the draining step with it.
+        "phase_since": number(controller.get("since"), None),
+        "input": input_label(meta),
         "paused": (directory / "pause").exists(),
         "can_skip": bool(controller.get("can_skip")),
         "elapsed_seconds": int(number(asr.get("captured", asr.get("seconds")))),
@@ -177,6 +190,19 @@ def snapshot(directory: Path, cache: SnapshotCache | None = None) -> dict:
     }
 
 
+def with_log_tail(record: dict) -> dict:
+    """A failed run carries the end of its controller log, read only from the registry's own folder."""
+    log = record.get("log")
+    if record.get("status") != "failed" or not isinstance(log, str):
+        return record
+    path = Path(log)
+    try:
+        inside = path.resolve().parent == runs.runs_dir().resolve() and not path.is_symlink()
+    except OSError:
+        inside = False
+    return {**record, "log_tail": log_tail(path) if inside else ""}
+
+
 class Busy(Exception):
     """Another session is already active."""
 
@@ -203,7 +229,8 @@ def records() -> list[dict]:
         except OSError:
             continue
         if record:
-            result.append(record)
+            # The record page falls back to this list when the event stream drops at the very end.
+            result.append(with_log_tail(record))
     return result
 
 
@@ -262,6 +289,10 @@ class Sessions:
 
     def final_record(self, active: dict) -> dict | None:
         """The finished registry record, or None while the controller still runs."""
+        record = self._final_record(active)
+        return record if record is None else with_log_tail(record)
+
+    def _final_record(self, active: dict) -> dict | None:
         try:
             record = runs.read(active["run_id"])
         except OSError:

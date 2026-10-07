@@ -32,7 +32,11 @@
 </script>
 
 <TopBar>
-  <a class="btn" href="#/"><Icon name="back" />返回首页</a>
+  {#if app.recording}
+    <a class="btn" href="#/record"><Icon name="back" />返回录制</a>
+  {:else}
+    <a class="btn" href="#/"><Icon name="back" />返回首页</a>
+  {/if}
 </TopBar>
 
 <main class="settings">

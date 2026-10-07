@@ -60,6 +60,8 @@ export interface Snapshot {
   output: string | null;
   started: string | null;
   phase: string;
+  phase_since: number | null;
+  input: string;
   paused: boolean;
   can_skip: boolean;
   elapsed_seconds: number;
@@ -75,7 +77,8 @@ export interface Snapshot {
 
 export interface RunRecord {
   run_id: string; course: string; output: string; status: string; exit_code?: number;
-  warnings?: string[]; log?: string | null; workspace_kept?: string | null;
+  warnings?: string[]; log?: string | null; log_tail?: string; workspace_kept?: string | null;
+  stages?: { name: string; seconds: number }[]; started?: string | null;
   flags?: { refinement_failed: boolean; has_fallback: boolean; detail_incomplete: boolean };
   [key: string]: unknown;
 }
