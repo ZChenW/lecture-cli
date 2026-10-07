@@ -22,4 +22,12 @@ describe("check fixes", () => {
       expect(JSON.stringify(fix)).not.toMatch(/lecture |\.\/install|运行 /);
     }
   });
+
+  it("explains what a missing CJK serif font changes, without commands", () => {
+    const fix = fixFor({ id: "cjk_font", label: "中文字体", level: "warn", detail: "无衬线 Noto Sans CJK SC · 衬线 未找到",
+      hint: "未找到中文衬线字体……例如 Arch 的 noto-fonts-cjk" });
+    expect(fix && "note" in fix && fix.note).toMatch(/衬线/);
+    expect(fix && "note" in fix && fix.note).toMatch(/阅读界面/);
+    expect(JSON.stringify(fix)).not.toMatch(/noto-fonts-cjk|fonts-noto-cjk|运行 /);
+  });
 });

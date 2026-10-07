@@ -1,8 +1,69 @@
-# Lecture CLI · 第一版
+# Lecture CLI
 
-本地 WhisperLiveKit 持续转录，可在下课后用 Qwen 离线重转录，再由独立进程调用 DeepSeek 生成中文课堂笔记。终端显示转录及状态，Markdown 自动保存到课程文件夹，可用 Obsidian 查看。
+课堂录音实时转成文字（本机 WhisperLiveKit，或云端转录服务），可在下课后用 Qwen 离线重转录，再由独立进程调用笔记服务（默认 DeepSeek，可换成任何 OpenAI 兼容服务）生成中文课堂笔记。图形界面或终端显示转录及状态，Markdown 自动保存到课程文件夹，可用 Obsidian 查看，也可以在图形界面里阅读。
 
-## 使用
+## 需要什么
+
+- **Linux**（x86_64）。
+- **[uv](https://docs.astral.sh/uv/)**：安装脚本用它建立项目自己的 Python 3.12 环境；本机没有 Python 3.12 时 uv 会自动下载一份。
+- **FFmpeg** 和 **PortAudio**：Arch 系统包为 `uv ffmpeg portaudio`；Debian/Ubuntu 为 `ffmpeg libportaudio2`（uv 按其官方说明安装）。
+- **中文字体**：Noto CJK，含衬线的 Noto Serif CJK（笔记阅读界面的标题和正文用它）。Arch 为 `noto-fonts-cjk`，Debian/Ubuntu 为 `fonts-noto-cjk`。
+- 可选 **NVIDIA GPU** 和正常工作的驱动：本地转录更快；Qwen 识别与课后校正需要它。
+- 可选 **WirePlumber**（`wpctl`）：自动降低削波的麦克风音量。
+- 图形界面默认用浏览器的应用窗口打开（Chromium、Google Chrome、Brave 或 Edge 之一，都没有时用默认浏览器）；也可以安装独立窗口（见下）。
+
+项目使用独立 Python 3.12 环境。本地安装的 PyTorch 用于 CPU 上的语音活动检测；Whisper 的 GPU 推理由 CTranslate2 执行，无需替换为 GPU PyTorch。
+
+## 安装
+
+```sh
+git clone https://github.com/ZChenW/lecture-cli.git && cd lecture-cli
+./install.sh --profile cpu     # 选一个：api、cpu 或 gpu，见下表
+lecture gui                    # 打开图形界面，按向导完成设置
+```
+
+| 安装配置 | 适合 | 装什么 |
+|---|---|---|
+| `--profile api` | 没有 GPU、CPU 较弱，用云端转录 | 只装基础依赖，不装本地模型和 torch |
+| `--profile cpu` | 本地转录，在 CPU 上运行 | `requirements.lock` 里的全部本地依赖（CPU 版 PyTorch） |
+| `--profile gpu` | 有 NVIDIA GPU 的本地转录 | 同 cpu，另装 `requirements-gpu.lock` 里的 CUDA 运行库 |
+
+不写 `--profile` 时，脚本会检测 `nvidia-smi`，给出建议（有可用 GPU 建议 `gpu`，否则 `cpu`），在终端里等你按回车确认或改选；不在终端里运行时直接退出并打印建议，不会替你选。
+
+其他选项：
+
+- `--with-gui`（默认开启）：图形界面依赖（`requirements-gui.lock`），并写入桌面入口 `~/.local/share/applications/lecture.desktop` 和图标；`--no-gui` 关闭。
+- `--with-window`：另装 pywebview，`lecture gui` 在独立窗口中打开，而不是浏览器的应用窗口。
+- `--with-qwen`：另装 Qwen GPU 环境，等同于再运行 `./install-qwen.sh`（见下文“Qwen 语音识别”）。
+- 旧用法 `./install.sh --api`、`./install.sh --gpu` 仍然可用，分别等同于 `--profile api`、`--profile gpu`。
+
+安装脚本把 `lecture` 链接到 `~/.local/bin`（设置了 `XDG_BIN_HOME` 时用它），把 zsh 补全链接到 `${XDG_DATA_HOME:-$HOME/.local/share}/zsh/site-functions`。这些位置已有不属于本项目的同名文件时，脚本列出它们并退出，不覆盖、不做任何改动。重复运行是安全的：已装好的依赖不会重装，已有的链接和桌面入口不会重写。
+
+代码固定 WhisperLiveKit 提交 `363e4f6d029694d9c81ae548beddd9d3c88a3637`，安装版本记录在 `requirements.lock`。项目可移动，但移动后需重新运行安装脚本以更新虚拟环境入口。
+
+GPU 运行库版本记录在 `requirements-gpu.lock`，放在项目虚拟环境中；程序只为转录子进程设置库搜索路径，不修改全局环境或系统驱动。GPU 模式需要正常工作的 NVIDIA 驱动。`CUDA_VISIBLE_DEVICES` 的用户设置会保留。
+
+上课前可先下载语音模型并检查环境：
+
+```sh
+lecture prepare          # 上课前下载 base.en 模型
+lecture doctor
+```
+
+卸载：`./uninstall.sh` 只移除上面的命令链接、补全文件、桌面入口和图标。配置与 key、模型缓存、笔记都不删除，结束时会打印它们的位置；项目目录（含虚拟环境）也保留，不再需要时可自行删除。
+
+## 图形界面
+
+```sh
+lecture gui              # 打开图形界面；界面已在运行时再打开一个指向它的窗口
+lecture gui --no-window  # 只启动本机界面服务并打印地址
+```
+
+第一次打开时有五步向导：课程目录 → 转录方式（本地或云端）→ 笔记服务 → 麦克风 → 检查。检查页列出环境检查的结果，失败项会指向能修复它的那一步；也可以在这一步试运行一次演示（自造文字，不录音，会消耗少量笔记服务额度）。之后的首页列出课程和笔记，可以开始录制、阅读笔记、修改设置。
+
+界面服务只监听本机回环地址，并用一次性令牌保护；录制在独立的后台进程里进行，关闭窗口不会中断录制，再次运行 `lecture gui` 会回到正在进行的课。安装了 pywebview（`--with-window`）时使用独立窗口，否则依次尝试 Chromium、Google Chrome、Brave、Edge 的应用窗口模式，都没有时用默认浏览器打开。
+
+## 命令行用法
 
 本机安装完成后：
 
@@ -25,6 +86,40 @@ lecture doctor --asr-device cuda        # 检查 GPU 可见性与运行库，不
 
 `--device` 仍然表示麦克风；`--asr-device` 表示语音模型的计算设备。`auto` 在没有可见 GPU 或缺少运行库时回退 CPU 并显示提示；模型加载或推理失败会报错，不在录制中静默切换设备。
 
+终端按 **P** 暂停/继续，按 **Q** 或 **Ctrl+C** 结束。结束后会等待转录收尾，再根据完整转录编写详细课堂笔记，然后清理本次临时目录。长课可能需要数分钟整理，界面显示章节进度。关闭终端或收到 SIGTERM/SIGHUP 也会尝试收尾；终端关闭时需要给后台进程留出退出时间。
+
+`start` 和 `demo` 的 `--headless` 不使用终端界面运行，需要指定课程；图形界面就是这样启动录制的。
+
+首次配置或更换麦克风：
+
+```sh
+lecture setup
+lecture devices
+lecture start math421 --device pipewire
+```
+
+`setup` 隐藏输入 API key，存入权限为 600 的配置文件 `notes-api-key`；环境变量 `LECTURE_NOTES_API_KEY` 优先。旧的变量 `DEEPSEEK_API_KEY` 和旧文件 `api-key` 仍可使用，优先级排在新名称之后。已有可用环境变量时不必运行 setup。不要把 key 写进命令参数。实际课堂文字会发送到 DeepSeek，使用 API 额度。
+
+可选参数：
+
+```sh
+lecture start math421 --interval 60 --context /path/to/context.md
+lecture start math421 --asr-model small.en
+lecture start math421 --language zh --asr-model small
+lecture --courses-dir /path/to/courses start course-name
+```
+
+`start/demo --context` 提供笔记生成背景（不超过 12,000 字符），不再传给 ASR。程序自动读取所选课程目录的 `glossary.json`，将英文术语给实时/离线 ASR，中英对应给笔记模型。例如：
+
+```json
+[
+  {"term": "planar isotopy", "translation": "平面同痕", "source": "讲义 p.31"},
+  {"term": "linking number", "translation": "链接数", "source": "讲义 p.36"}
+]
+```
+
+`source` 可省略。英文术语合并后本地模式最多 1,000 字符、API 模式最多 600 字符，超出会在录音启动前提示缩减；不会静默截断。没有词表也可正常录音。程序不会自动读取课程目录里的作业或 PDF，词表注明来源不代表已经加载讲义。
+
 ### 自动降低麦克风削波音量
 
 `lecture start` 默认启用 `auto_gain`，本地与云端后端都适用。仅调节 PipeWire 默认源（未指定 `--device`，或使用 `pipewire`、`default`、`pulse`）；数字编号、具体硬件名称、`--audio-file` 和 demo 不调节。每累计约 2 秒收音，若至少 0.1% 采样达到削波阈值（绝对值 ≥ 0.999），就降低 12 dB：按 PipeWire 立方刻度将音量乘以约 0.631，最低 10%。每次调整后跳过一个窗口等待生效，暂停期间不评估；到下限仍削波时提示检查硬件增益（Mic Boost）。
@@ -36,7 +131,7 @@ lecture doctor --asr-device cuda        # 检查 GPU 可见性与运行库，不
 ### 云端 API 转录（无 GPU / 弱 CPU）
 
 ```sh
-./install.sh --api                       # 只装基础依赖，不装本地模型和 torch
+./install.sh --profile api              # 只装基础依赖，不装本地模型和 torch
 export LECTURE_ASR_API_KEY='你的转录服务 key'
 export LECTURE_NOTES_API_KEY='你的笔记服务 key'
 lecture doctor --asr-backend api         # 验证转录服务，不录音
@@ -120,41 +215,24 @@ autoload -Uz compinit
 compinit
 ```
 
-补全不会启动录制、调用 API 或恢复旧会话。
+补全也覆盖 `lecture gui` 及其 `--no-window`，以及 `start`、`demo` 的 `--headless`。补全不会启动录制、调用 API 或恢复旧会话。
 
-终端按 **P** 暂停/继续，按 **Q** 或 **Ctrl+C** 结束。结束后会等待转录收尾，再根据完整转录编写详细课堂笔记，然后清理本次临时目录。长课可能需要数分钟整理，界面显示章节进度。关闭终端或收到 SIGTERM/SIGHUP 也会尝试收尾；终端关闭时需要给后台进程留出退出时间。
-
-首次配置或更换麦克风：
+### 演示与已有音频
 
 ```sh
-lecture setup
-lecture devices
-lecture start math421 --device pipewire
+lecture demo math421
 ```
 
-`setup` 隐藏输入 API key，存入权限为 600 的配置文件 `notes-api-key`；环境变量 `LECTURE_NOTES_API_KEY` 优先。旧的变量 `DEEPSEEK_API_KEY` 和旧文件 `api-key` 仍可使用，优先级排在新名称之后。已有可用环境变量时不必运行 setup。不要把 key 写进命令参数。实际课堂文字会发送到 DeepSeek，使用 API 额度。
-
-可选参数：
+使用自造的英文课堂文字调用真实 DeepSeek，**不会打开麦克风**，在对应课程中生成带“演示”标记的笔记。
 
 ```sh
-lecture start math421 --interval 60 --context /path/to/context.md
-lecture start math421 --asr-model small.en
-lecture start math421 --language zh --asr-model small
-lecture --courses-dir /path/to/courses start course-name
+lecture start math421 --audio-file /path/to/lecture.wav
+lecture start math421 --audio-file /path/to/lecture.wav --fast
 ```
 
-`start/demo --context` 提供笔记生成背景（不超过 12,000 字符），不再传给 ASR。程序自动读取所选课程目录的 `glossary.json`，将英文术语给实时/离线 ASR，中英对应给笔记模型。例如：
+已有音频默认按实时速度输入，`--fast` 尽快处理。用户提供的原始文件不会被删除。音频输入与麦克风复用同一 WhisperLiveKit 流式处理和笔记链路。
 
-```json
-[
-  {"term": "planar isotopy", "translation": "平面同痕", "source": "讲义 p.31"},
-  {"term": "linking number", "translation": "链接数", "source": "讲义 p.36"}
-]
-```
-
-`source` 可省略。英文术语合并后本地模式最多 1,000 字符、API 模式最多 600 字符，超出会在录音启动前提示缩减；不会静默截断。没有词表也可正常录音。程序不会自动读取课程目录里的作业或 PDF，词表注明来源不代表已经加载讲义。
-
-## 课堂收音与 ASR 对比诊断
+### 课堂收音与 ASR 对比诊断
 
 课堂转录出现乱码或漏句时，先让两个语音模型识别同一段实际环境音频：
 
@@ -181,6 +259,105 @@ lecture diagnose-asr MATH421 --audio-file /path/to/sample.wav --seconds 60
 ```
 
 默认按实时速度重放，以贴近课堂路径；对已有音频可加 `--fast` 缩短等待。可用 `--model-a`、`--model-b` 更换任一模型。诊断命令的 `--context` 是 ASR 短词表，最多 1,000 字符，与 `start --context` 的笔记背景用途不同。若两份转录都很差且报告显示大面积近静音，应先改善麦克风距离或输入设备；模型结果不同则用完整句、术语和漏句情况做人工比较。
+
+## 配置项参考
+
+配置文件是配置目录（默认 `~/.config/lecture-cli/`，遵循 `XDG_CONFIG_HOME`）里的 `config.json`。图形界面的向导和设置页、`lecture setup`、`lecture models` 都会写它，也可以手工编辑；没写的键取默认值，未知键原样保留。旧版（没有 `config_version`）的文件首次读取时自动升级，原文件另存为 `config.json.v1.bak`。
+
+| 键 | 类型 | 默认 | 说明 |
+|---|---|---|---|
+| `config_version` | int | `2` | 配置格式版本 |
+| `courses_dir` | str 或 null | `null` | 课程根目录，没有默认值；其下每个文件夹是一门课 |
+| `notes_provider` | str | `"deepseek"` | 笔记服务预设：`deepseek`、`openai`、`custom` |
+| `notes_api_base` | str | `"https://api.deepseek.com"` | 笔记服务地址（OpenAI 兼容，须以 `http://` 或 `https://` 开头） |
+| `notes_model` | str | `"deepseek-flash"` | 笔记模型名称，不能为空 |
+| `notes_extra_body` | object | `{"thinking": {"type": "disabled"}}` | 追加到每个笔记请求体里的服务专有字段 |
+| `asr_backend` | `"local"` 或 `"api"` | `"local"` | 本地转录或云端转录 |
+| `asr_model` | str | `"base.en"` | 本地语音模型（`lecture models` 查看全部） |
+| `asr_device` | `"auto"`/`"cuda"`/`"cpu"` | `"auto"` | 本地语音模型的计算设备 |
+| `asr_provider` | str | `"groq"` | 云端转录预设：`groq`、`openai`、`custom` |
+| `asr_api_base` | str | `"https://api.groq.com/openai/v1"` | 云端转录服务地址 |
+| `asr_api_model` | str | `"whisper-large-v3-turbo"` | 云端转录模型；`asr_backend` 为 `api` 时不能为空 |
+| `language` | str | `"en"` | 课堂语言，如 `en`、`zh`、`auto` |
+| `interval` | number | `60` | 随堂笔记检查间隔（秒，1–3600） |
+| `device` | int/str/null | `null` | 麦克风编号或名称；`null` 为系统默认 |
+| `refine` | bool | `false` | 下课后用 Qwen 离线重转录 |
+| `refine_model` | str | `"qwen3-asr-1.7b"` | 课后校正模型：`qwen3-asr-1.7b` 或 `qwen3-asr-0.6b` |
+| `auto_gain` | bool | `true` | 自动降低削波的默认麦克风音量 |
+| `qwen_python` | str 或 null | `null` | Qwen 环境的 Python 路径；`null` 时用项目里的 `.venv-qwen` |
+
+key 不写进 `config.json`。笔记 key 依次读取环境变量 `LECTURE_NOTES_API_KEY`、旧变量 `DEEPSEEK_API_KEY`、配置目录里的 `notes-api-key` 文件、旧文件 `api-key`；转录 key 依次读取 `LECTURE_ASR_API_KEY`、`asr-api-key` 文件。图形界面和 `lecture setup` 写入的 key 文件权限为 600。两个 key 分别只传给笔记进程和转录进程。
+
+**全本地**：本机转录，笔记交给本机运行的 OpenAI 兼容服务（下例地址为占位，换成你的服务；这类服务通常接受任意非空 key，但仍须设置一个）。
+
+```json
+{
+  "config_version": 2,
+  "courses_dir": "/home/you/Courses",
+  "asr_backend": "local",
+  "asr_model": "large-v3-turbo",
+  "asr_device": "auto",
+  "language": "en",
+  "refine": false,
+  "auto_gain": true,
+  "notes_provider": "custom",
+  "notes_api_base": "http://127.0.0.1:8080/v1",
+  "notes_model": "your-local-model",
+  "notes_extra_body": {}
+}
+```
+
+**本地转录 + 云端笔记**（默认组合，笔记用 DeepSeek）：
+
+```json
+{
+  "config_version": 2,
+  "courses_dir": "/home/you/Courses",
+  "asr_backend": "local",
+  "asr_model": "large-v3-turbo",
+  "asr_device": "auto",
+  "language": "en",
+  "refine": true,
+  "refine_model": "qwen3-asr-1.7b",
+  "notes_provider": "deepseek",
+  "notes_api_base": "https://api.deepseek.com",
+  "notes_model": "deepseek-flash",
+  "notes_extra_body": {"thinking": {"type": "disabled"}}
+}
+```
+
+**全云端**（转录用 Groq，笔记用 OpenAI；`notes_model` 须自己填写）：
+
+```json
+{
+  "config_version": 2,
+  "courses_dir": "/home/you/Courses",
+  "asr_backend": "api",
+  "asr_provider": "groq",
+  "asr_api_base": "https://api.groq.com/openai/v1",
+  "asr_api_model": "whisper-large-v3-turbo",
+  "language": "en",
+  "notes_provider": "openai",
+  "notes_api_base": "https://api.openai.com/v1",
+  "notes_model": "填写你要用的模型名",
+  "notes_extra_body": {}
+}
+```
+
+## 更换服务
+
+笔记服务和云端转录服务都可以在图形界面的设置页更换（选预设或“自定义”，填地址、模型和 key，可当场“测试连接”），也可以直接改上面的配置键。预设里模型名为空的（如 OpenAI 笔记）需要自己填写，程序不替你猜模型名。
+
+笔记服务须满足：
+
+- OpenAI 兼容的 `POST {notes_api_base}/chat/completions`，请求体为 `model`、`messages`、`stream: false`、`max_tokens`，再合并 `notes_extra_body`；必须支持 `max_tokens`。
+- 正常结束时 `finish_reason` 为 `"stop"`；其他取值按“输出不完整”处理。
+- 提供 `GET {notes_api_base}/models`：连接测试和 `lecture doctor` 用它验证地址与 key（列表里没有所配模型时只给警告，有些服务不列全）。
+- 鉴权为 `Authorization: Bearer <key>`。
+
+云端转录服务须兼容 `POST {asr_api_base}/audio/transcriptions`，并提供 `GET {asr_api_base}/models`（详见上文“云端 API 转录”）。
+
+课堂文字会发送给笔记服务，云端转录时课堂音频会上传给转录服务，分别消耗各自的额度。
 
 ## 保存规则
 
@@ -218,35 +395,20 @@ SIGKILL、断电无法执行即时清理；下次运行 `lecture` 的任一子�
 
 软件环境、语音模型缓存和用户配置长期保留，属于运行所需资源；每节课产生的中间数据按上述规则清理。默认模型缓存遵循 Hugging Face 配置。
 
-## 演示与已有音频
+第一版的时间戳是模型估计的音频相对时间，不含暂停时长。L 编号表示本次转录片段，最终笔记附每批的时间范围；完整转录按要求不长期保存。未提供的板书与听辨不清的公式保留“待核对”。
 
-```sh
-lecture demo math421
-```
+## 故障排查
 
-使用自造的英文课堂文字调用真实 DeepSeek，**不会打开麦克风**，在对应课程中生成带“演示”标记的笔记。
+- **找不到 `lecture` 命令**：确认 `~/.local/bin`（或 `XDG_BIN_HOME`）在 `PATH` 里，然后打开新终端。
+- **安装脚本提示“已有其他 lecture 命令，未覆盖”**（或补全文件、桌面入口、图标）：那个位置已有别的程序的文件。确认后移走或改名，再重新运行安装脚本；脚本不会覆盖它。
+- **先跑一遍检查**：`lecture doctor`，或图形界面设置页的“环境检查”。它只请求两个服务的 `/models`，不录音、不生成笔记；每一项失败都给出修复建议。
+- **`lecture gui` 提示缺少界面依赖**：用 `--profile api` 安装时加了 `--no-gui`。不加 `--no-gui` 重新运行 `./install.sh` 即可。
+- **独立窗口在 Wayland 下显示异常**：pywebview 只是可选项。卸掉它（`uv pip uninstall --python .venv/bin/python pywebview`）后，`lecture gui` 会改用浏览器的应用窗口，这是有保障的方式。
+- **阅读界面的中文标题显示为黑体**：系统缺少中文衬线字体，`lecture doctor` 的“中文字体”一项会给出警告。安装 Noto Serif CJK（见“需要什么”）。
+- **GPU 没被使用**：`lecture doctor --asr-device cuda` 检查 GPU 可见性与运行库；用 `--profile gpu` 安装才会装项目内的 CUDA 运行库。需要正常工作的 NVIDIA 驱动。
+- **笔记没保存、提示目标目录不可写**：内容暂存在 `/tmp`，修复目录后再次运行 `lecture` 的任一子命令即可恢复（见“保存规则”）；这时不要先清空 `/tmp`。
 
-```sh
-lecture start math421 --audio-file /path/to/lecture.wav
-lecture start math421 --audio-file /path/to/lecture.wav --fast
-```
-
-已有音频默认按实时速度输入，`--fast` 尽快处理。用户提供的原始文件不会被删除。音频输入与麦克风复用同一 WhisperLiveKit 流式处理和笔记链路。
-
-## 安装与检查
-
-需要 Linux、uv、FFmpeg、PortAudio；Arch 系统包为 `uv ffmpeg portaudio`。项目使用独立 Python 3.12 环境。本地安装的 PyTorch 用于 CPU 上的语音活动检测；Whisper 的 GPU 推理由 CTranslate2 执行，无需替换为 GPU PyTorch。
-
-```sh
-./install.sh
-./install.sh --gpu        # NVIDIA 机器：同时安装项目内的 CUDA 运行库
-lecture prepare          # 上课前下载 base.en 模型
-lecture doctor
-```
-
-代码固定 WhisperLiveKit 提交 `363e4f6d029694d9c81ae548beddd9d3c88a3637`，安装版本记录在 `requirements.lock`。项目可移动，但移动后需重新运行安装脚本以更新虚拟环境入口。
-
-GPU 运行库版本记录在 `requirements-gpu.lock`，放在项目虚拟环境中；程序只为转录子进程设置库搜索路径，不修改全局环境或系统驱动。GPU 模式需要正常工作的 NVIDIA 驱动。`CUDA_VISIBLE_DEVICES` 的用户设置会保留。
+## 开发
 
 ```sh
 .venv/bin/python -m pytest -q
@@ -254,10 +416,6 @@ uv pip check --python .venv/bin/python
 ```
 
 测试覆盖增量处理、事务恢复、输出截断、时间顺序、行修订、收尾、API 故障、真实子进程信号退出、异常死亡恢复、临时目录清理及已有笔记保护。
-
-第一版的时间戳是模型估计的音频相对时间，不含暂停时长。L 编号表示本次转录片段，最终笔记附每批的时间范围；完整转录按要求不长期保存。未提供的板书与听辨不清的公式保留“待核对”。
-
-## 开发
 
 图形界面的前端源码在 `frontend/`（Svelte 5 + Vite + TypeScript），构建产物 `lecture_cli/gui/static/` 提交在仓库中，所以安装和使用都不需要 Node。改了前端要重新构建并提交产物：
 

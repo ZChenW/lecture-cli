@@ -57,7 +57,10 @@ def test_real_zsh_tab_completes_commands_courses_and_gpu_options(tmp_path):
         os.write(master, setup.encode())
         read_until(["\r\nSETUP_DONE\r\n"])
         for command, expected in [
-            ("lecture ", ["start", "doctor", "models", "diagnose-asr"]),
+            ("lecture ", ["start", "doctor", "models", "diagnose-asr", "gui"]),
+            ("lecture gui --", ["--no-window"]),
+            ("lecture start --he", ["--headless"]),
+            ("lecture demo --he", ["--headless"]),
             ("lecture start --asr-model ", ["base.en", "medium.en", "qwen3-asr-1.7b", "qwen3-asr-0.6b"]),
             ("lecture doctor --asr-model ", ["qwen3-asr-1.7b", "qwen3-asr-0.6b"]),
             ("lecture start ", ["CS590OP_HW", "MATH421"]),

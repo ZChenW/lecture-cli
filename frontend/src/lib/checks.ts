@@ -26,7 +26,8 @@ export const FIXES: Record<string, FixTarget | null> = {
 const SYSTEM_NOTES: Record<string, string> = {
   ffmpeg: "需要系统软件 FFmpeg，请用系统的软件包管理器安装。",
   wpctl: "安装系统组件 WirePlumber 后才能自动调节麦克风音量。",
-  cjk_font: "建议安装 Noto CJK 中文字体，否则中文可能显示不全。",
+  // The detail line already says which of the two is missing.
+  cjk_font: "请用系统的软件包管理器安装 Noto CJK 中文字体（含衬线的 Noto Serif CJK）。缺少衬线字体时，笔记阅读界面的标题和正文会改用无衬线字体。",
 };
 
 export const TARGET_LABELS: Record<FixTarget, string> = {

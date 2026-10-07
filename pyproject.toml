@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "lecture-cli"
-version = "0.1.0"
-description = "Local lecture transcription and DeepSeek notes"
+version = "0.2.0"
+description = "Lecture transcription and Chinese class notes, with local or cloud speech recognition and any OpenAI-compatible notes service"
 requires-python = ">=3.11,<3.14"
 dependencies = [
   "rich>=13,<15",

@@ -6,6 +6,7 @@ import importlib.util
 import json
 import os
 from pathlib import Path
+import re
 import shutil
 import subprocess
 
@@ -75,12 +76,31 @@ def refine_ready(config, cached) -> Check:
     return check("refine", "课后校正", cached(model), model, f"运行 lecture prepare --asr-model {model}", bad="warn")
 
 
+# fontconfig has no serif property; CJK families say it in their names (Noto Serif CJK, Source Han
+# Serif, AR PL UMing, SimSun, MS Mincho ...). Kai faces are neither, and count as neither.
+CJK_SERIF = re.compile(r"serif|song|sun\b|ming|mincho|宋|明", re.I)
+CJK_SANS = re.compile(r"sans|hei|gothic|黑", re.I)
+FONT_HINT = "安装 Noto CJK 字体（含衬线的 Noto Serif CJK），例如 Arch 的 noto-fonts-cjk、Debian/Ubuntu 的 fonts-noto-cjk"
+
+
 def cjk_font(runner) -> Check:
+    """The UI uses a CJK sans; the reader's titles and body need a CJK serif, or fall back to sans."""
     try:
-        found = bool((runner or subprocess.run)(["fc-list", ":lang=zh"], capture_output=True, text=True, timeout=10).stdout.strip())
+        listing = (runner or subprocess.run)(["fc-list", ":lang=zh", "family"],
+                                             capture_output=True, text=True, timeout=10).stdout
     except (OSError, subprocess.SubprocessError):
-        found = False
-    return check("cjk_font", "中文字体", found, hint="安装 Noto CJK 字体，例如 noto-fonts-cjk 或 fonts-noto-cjk", bad="warn")
+        listing = ""
+    families = sorted({name.strip() for line in listing.splitlines() for name in line.split(",") if name.strip()})
+    def pick(pattern):
+        found = [name for name in families if pattern.search(name)]
+        return next((name for name in found if " SC" in name), found[0] if found else "")
+    sans, serif = pick(CJK_SANS), pick(CJK_SERIF)
+    detail = f"无衬线 {sans or '未找到'} · 衬线 {serif or '未找到'}"
+    if not serif and sans:
+        hint = "未找到中文衬线字体，笔记阅读界面的标题和正文将改用无衬线字体；" + FONT_HINT
+    else:
+        hint = FONT_HINT
+    return check("cjk_font", "中文字体", bool(sans and serif), detail, hint, bad="warn")
 
 
 def microphone(config) -> Check:

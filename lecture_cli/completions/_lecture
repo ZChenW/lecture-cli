@@ -15,6 +15,7 @@ _lecture() {
     'devices:列出麦克风'
     'diagnose-asr:录制同一段音频并对比两个语音模型'
     'demo:使用自造文字生成演示笔记'
+    'gui:打开图形界面'
   )
   _arguments -C \
     '(-h --help)'{-h,--help}'[显示帮助]' \
@@ -30,6 +31,7 @@ _lecture() {
       case $command_name in
         start)
           _arguments -C $common \
+            '--headless[不使用终端界面运行，需指定课程]' \
             '--asr-backend[采集后端]:后端:(local api)' \
             '--asr-api-model[云端转录模型]:模型:' \
             '--asr-device[语音识别设备]:设备:(auto cuda cpu)' \
@@ -48,9 +50,13 @@ _lecture() {
           ;;
         demo)
           _arguments -C $common \
+            '--headless[不使用终端界面运行，需指定课程]' \
             '--interval[笔记检查间隔]:秒数:(30 60 90 120)' \
             '--context[课程背景文件]:文件:_files' \
             '1:课程:->course'
+          ;;
+        gui)
+          _arguments -C $common '--no-window[只启动本机界面服务并打印地址]'
           ;;
         prepare)
           _arguments -C $common '--asr-model[语音模型]:模型:->asr_model'

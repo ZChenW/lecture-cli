@@ -485,11 +485,12 @@ def test_other_child_roles_never_receive_asr_key(tmp_path, monkeypatch, mode):
         assert ("LECTURE_NOTES_API_KEY" in env) == (role == "_worker")
 
 
-@pytest.mark.parametrize("argument,expected", [("--api", 1), ("", 2), ("--gpu", 3)])
+@pytest.mark.parametrize("argument,expected", [("--api", 1), ("--profile=cpu", 2), ("--gpu", 3)])
 def test_install_modes_use_lightweight_or_original_dependencies(tmp_path, argument, expected):
     project = tmp_path / "project"
     project.mkdir()
-    (project / "install.sh").write_text((Path(__file__).resolve().parents[1] / "install.sh").read_text())
+    for name in ("install.sh", "pyproject.toml"):
+        (project / name).write_text((Path(__file__).resolve().parents[1] / name).read_text())
     executable = project / ".venv" / "bin" / "python"
     executable.parent.mkdir(parents=True)
     executable.symlink_to(sys.executable)
@@ -502,12 +503,11 @@ def test_install_modes_use_lightweight_or_original_dependencies(tmp_path, argume
     env = dict(os.environ, PATH=str(bin_dir) + os.pathsep + os.environ["PATH"],
                XDG_BIN_HOME=str(tmp_path / "bin"), XDG_DATA_HOME=str(tmp_path / "data"),
                UV_TEST_LOG=str(log))
-    command = ["bash", str(project / "install.sh")]
-    if argument:
-        command.append(argument)
+    # Without the GUI extras: these are exactly the installs the script made before --profile existed.
+    command = ["bash", str(project / "install.sh"), argument, "--no-gui"]
     result = subprocess.run(command, env=env, capture_output=True, text=True, timeout=10)
     assert result.returncode == 0, result.stdout + result.stderr
-    calls = log.read_text().splitlines()
+    calls = [call for call in log.read_text().splitlines() if call.startswith("pip install")]
     assert len(calls) == expected
     if argument == "--api":
         assert "requirements" not in calls[0] and "torch" not in calls[0]

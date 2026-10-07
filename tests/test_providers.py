@@ -142,10 +142,15 @@ def test_missing_key_is_reported_without_a_request():
     assert result.level == "fail" and "未设置 key" in result.message and not seen
 
 
+FC_BOTH = ("Noto Sans CJK JP,Noto Sans CJK JP Regular\nNoto Sans Mono CJK SC\nNoto Sans CJK SC\n"
+           "Noto Serif CJK TC\nNoto Serif CJK SC\n")
+
+
 def fake_runner(fonts=True):
     def run(command, **kwargs):
         if command[0] == "fc-list":
-            return SimpleNamespace(stdout="Noto Sans CJK SC:style=Regular\n" if fonts else "")
+            assert command == ["fc-list", ":lang=zh", "family"]
+            return SimpleNamespace(stdout=FC_BOTH if fonts else "")
         if command[0] == "wpctl":
             return SimpleNamespace(stdout="Volume: 0.42")
         assert command[1:3] == ["-m", "lecture_cli.asr"]
@@ -187,3 +192,30 @@ def test_run_checks_api_structure_and_weights_warning(tmp_path):
     assert by_id["courses_dir"].level == "fail" and by_id["courses_dir"].detail == "尚未设置"
     assert by_id["asr_service"].level == by_id["notes_service"].level == "fail"
     assert by_id["cjk_font"].level == "ok"
+
+
+@pytest.mark.parametrize("listing, level, detail", [
+    (FC_BOTH, "ok", "无衬线 Noto Sans CJK SC · 衬线 Noto Serif CJK SC"),
+    ("Noto Sans CJK SC\nNoto Sans Mono CJK SC\nAR PL UKai CN\n", "warn", "无衬线 Noto Sans CJK SC · 衬线 未找到"),
+    ("WenQuanYi Zen Hei,文泉驛正黑,文泉驿正黑\nAR PL UMing CN\n", "ok", "无衬线 WenQuanYi Zen Hei · 衬线 AR PL UMing CN"),
+    ("Source Han Serif SC,思源宋体\n", "warn", "无衬线 未找到 · 衬线 Source Han Serif SC"),
+    ("", "warn", "无衬线 未找到 · 衬线 未找到"),
+])
+def test_cjk_font_check_tells_serif_from_sans(listing, level, detail):
+    result = checks.cjk_font(lambda command, **kw: SimpleNamespace(stdout=listing))
+    assert (result.id, result.label, result.level, result.detail) == ("cjk_font", "中文字体", level, detail)
+    assert bool(result.hint) == (level != "ok")
+    if level != "ok":
+        assert "Noto Serif CJK" in result.hint
+
+
+def test_missing_cjk_serif_warns_that_the_reader_falls_back():
+    result = checks.cjk_font(lambda command, **kw: SimpleNamespace(stdout="Noto Sans CJK SC\n"))
+    assert result.level == "warn" and "阅读界面" in result.hint and "无衬线" in result.hint
+
+
+def test_cjk_font_check_without_fontconfig():
+    def missing(command, **kw):
+        raise FileNotFoundError(command[0])
+    result = checks.cjk_font(missing)
+    assert result.level == "warn" and result.detail == "无衬线 未找到 · 衬线 未找到"
