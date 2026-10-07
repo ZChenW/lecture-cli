@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
-  closingStages, isTyping, levelShare, lyrics, micPercent, progressOf, pushLevel, segmentTime, tailText, updatedAgo,
+  chapterStatus, closingStages, destinationLine, isTyping, levelShare, lyrics, micPercent, progressOf, pushLevel, savedPath, segmentTime, tailText, updatedAgo,
   waveBars, WAVE_BARS,
 } from "./record";
 import type { Snapshot } from "./types";
@@ -94,9 +94,31 @@ describe("closing stages", () => {
     expect(refining.map((s) => [s.key, s.state, s.seconds])).toEqual([
       ["draining", "done", 50], ["refining", "done", 90], ["finalizing", "current", null], ["saving", "pending", null]]);
     expect(refining[2].progress).toEqual({ done: 2, total: 7 });
+    expect(refining[2].status).toBe("第 2 / 7 章");
     const plain = closingStages(snap({ phase: "draining" }), null);
     expect(plain.map((s) => [s.label, s.state])).toEqual([
       ["完成末尾转录", "current"], ["编写详细笔记", "pending"], ["保存", "pending"]]);
     expect(plain[0].status).toBe("转录收尾中");
+  });
+});
+
+describe("closing and end texts", () => {
+  it("shows chapter progress instead of repeating the stage name", () => {
+    expect(chapterStatus("编写详细笔记 3/7")).toBe("第 3 / 7 章");
+    expect(chapterStatus("规划课堂主题 · L1–L80")).toBe("规划课堂主题 · L1–L80");
+    expect(chapterStatus("")).toBe("");
+  });
+
+  it("says where the notes went once they are saved", () => {
+    expect(destinationLine("MATH421", false)).toBe("笔记将保存到 MATH421 / LectureNotes");
+    expect(destinationLine("MATH421", true)).toBe("笔记已保存到 MATH421 / LectureNotes");
+    expect(destinationLine(null, true)).toBe("");
+  });
+
+  it("splits the saved path into course, folder and whole file name", () => {
+    expect(savedPath("/home/u/courses/MATH 421/LectureNotes/2026-10-07_090200-课堂笔记-f1x7ur.md", "MATH 421"))
+      .toEqual(["MATH 421", "LectureNotes", "2026-10-07_090200-课堂笔记-f1x7ur.md"]);
+    expect(savedPath("/elsewhere/x.md", "LING200")).toEqual(["LING200", "LectureNotes", "x.md"]);
+    expect(savedPath(null, "LING200")).toEqual([]);
   });
 });

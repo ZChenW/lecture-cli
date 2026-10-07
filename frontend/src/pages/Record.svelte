@@ -90,10 +90,12 @@
     }
   }
 
-  const togglePause = () => snapshot && act(snapshot.paused ? "resume" : "pause");
+  // Buttons stay focusable while a request is out (aria-disabled), so a busy press is ignored here.
+  const togglePause = () => snapshot && !busy && act(snapshot.paused ? "resume" : "pause");
 
   // Stopping takes a second press within three seconds; no dialog (plan M6).
   function stop() {
+    if (busy) return;
     clearTimeout(disarm);
     if (!armed) {
       armed = true;

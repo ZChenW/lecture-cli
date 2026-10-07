@@ -74,6 +74,8 @@ body { min-width: 320px; }
   text-autospace: normal;
 }
 h1, h2, h3, p { margin: 0; }
+/* The bundled math font, never a system one: installed fonts rarely carry the MATH table. */
+math { font-family: "STIX Two Math", math; }
 button, input, select { font: inherit; color: inherit; }
 a { color: inherit; }
 .paper a:hover { color: var(--accent); }

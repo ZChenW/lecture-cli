@@ -63,9 +63,19 @@ def test_index_html_has_no_inline_code_or_external_resources():
 
 def test_fonts_ship_with_their_licences():
     fonts = STATIC / "fonts"
-    for family in ("instrument-serif", "geist", "geist-mono", "source-serif-4", "dm-mono"):
+    for family in ("instrument-serif", "geist", "geist-mono", "source-serif-4", "dm-mono", "stix-two-math"):
         assert list(fonts.glob(f"{family}-latin-*.woff2")), family
         assert "SIL Open Font License" in (fonts / f"{family}-OFL.txt").read_text()
+
+
+def test_math_uses_the_bundled_math_font_with_italic_identifiers():
+    # Installed fonts rarely have a MATH table or the Mathematical Italic letters; the build brings one.
+    css = "".join(path.read_text() for path in (STATIC / "assets").glob("*.css"))
+    face = re.search(r'@font-face\{font-family:"?STIX Two Math"?;[^}]*url\(\.\./fonts/(stix-two-math-[^)]+\.woff2)\)', css)
+    assert face and (STATIC / "fonts" / face[1]).is_file()
+    assert re.search(r'math\{font-family:"?STIX Two Math"?', css)
+    # Single-letter identifiers stay italic (no text-transform override on mi).
+    assert not re.search(r"mi[^{]*\{[^}]*text-transform:\s*none", css)
 
 
 def test_every_environment_check_has_a_gui_destination():

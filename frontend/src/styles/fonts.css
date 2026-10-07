@@ -1,4 +1,4 @@
-/* Latin subsets only, woff2 only, bundled with the build: no font is fetched from the network.
+/* woff2 only, bundled with the build: no font is fetched from the network. Latin subsets for text;
    Chinese text uses the system font stacks in base.css. Licenses: static/fonts/. */
 @font-face {
   font-family: "Instrument Serif";
@@ -83,4 +83,14 @@
   font-weight: 500;
   font-display: swap;
   src: url("../../node_modules/@fontsource/dm-mono/files/dm-mono-latin-500-normal.woff2") format("woff2");
+}
+/* OpenType MATH font for KaTeX's MathML: stretchy operators, limits and the Mathematical Italic
+   letters Chrome uses for single-letter identifiers. The fontsource "latin" file is the full font
+   (MATH table, U+1D400 block included), so no unicode-range is declared. */
+@font-face {
+  font-family: "STIX Two Math";
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url("../../node_modules/@fontsource/stix-two-math/files/stix-two-math-latin-400-normal.woff2") format("woff2");
 }

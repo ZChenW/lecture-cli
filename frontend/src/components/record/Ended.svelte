@@ -1,6 +1,7 @@
 <script lang="ts">
   import { api } from "../../lib/api";
   import { formatElapsed } from "../../lib/format";
+  import { destinationLine, savedPath } from "../../lib/record";
   import { navigate } from "../../lib/router";
   import { message } from "../../lib/state.svelte";
   import type { RunRecord } from "../../lib/types";
@@ -18,6 +19,7 @@
   const STATES: Record<Kind, string> = { done: "已保存", unsaved: "尚未保存", failed: "异常结束" };
   const TITLES: Record<Kind, string> = { done: "笔记已保存", unsaved: "笔记尚未成功保存", failed: "课堂异常结束" };
   let file = $derived(record.output?.split("/").pop() ?? "");
+  let segments = $derived(savedPath(record.output, record.course));
 
   async function reveal() {
     error = "";
@@ -35,14 +37,19 @@
     {#if elapsed != null}<div class="timer" data-timer>{formatElapsed(elapsed)}</div>{/if}
     <div class="meta">
       <span>{dateline}</span>
-      {#if record.course}<span>笔记将保存到 {record.course} / LectureNotes</span>{/if}
+      {#if record.course}<span>{destinationLine(record.course, kind === "done")}</span>{/if}
     </div>
   </section>
   <section class="center">
     <span class="label">{kind === "done" ? "课堂结束" : kind === "unsaved" ? "需要处理" : "出错了"}</span>
     <h1>{TITLES[kind]}</h1>
     {#if kind === "done"}
-      <p class="path">{record.output}</p>
+      <!-- Whole segments: a line may break at a separator, never inside the file name. -->
+      <p class="segments" title={record.output}>
+        {#each segments as segment, i (i)}
+          <span class="segment" class:course={i === 0 && segments.length > 1}><span class="name">{segment}</span>{#if i < segments.length - 1}<span class="sep" aria-hidden="true">/</span>{/if}</span>
+        {/each}
+      </p>
     {:else if kind === "unsaved"}
       <p class="callout" role="alert">
         笔记尚未成功保存，暂存于 <span class="mono">{record.workspace_kept ?? "临时目录"}</span>；恢复目标目录可写后重新打开 Lecture 会自动恢复
@@ -94,6 +101,11 @@
   h1 { margin: 0; font-size: 38px; line-height: 1.25; font-weight: 400; letter-spacing: -0.01em; color: #FFFFFF; }
   p { margin: 0; }
   .path { font-family: 'Geist Mono', monospace; font-size: 13px; line-height: 1.6; color: #A9ABB0; overflow-wrap: anywhere; }
+  .segments { display: flex; flex-wrap: wrap; column-gap: 0.6ch; font-family: 'Geist Mono', monospace; font-size: 13px; line-height: 1.6; color: #A9ABB0; }
+  .segment { display: inline-flex; gap: 0.6ch; min-width: 0; max-width: 100%; white-space: nowrap; }
+  /* A course name longer than the line gives way first, with an ellipsis; the title has the full path. */
+  .segment .name { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+  .sep { flex: none; color: #8E9096; }
   .mono { font-family: 'Geist Mono', monospace; font-size: 13px; overflow-wrap: anywhere; }
   .callout {
     padding: 18px 20px;

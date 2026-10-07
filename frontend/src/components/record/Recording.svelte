@@ -1,6 +1,6 @@
 <script lang="ts">
   import { formatElapsed } from "../../lib/format";
-  import { BACKLOG_WARN_SECONDS, micPercent } from "../../lib/record";
+  import { BACKLOG_WARN_SECONDS, destinationLine, micPercent } from "../../lib/record";
   import type { Snapshot } from "../../lib/types";
   import NotesCard from "./NotesCard.svelte";
   import StateLabel from "./StateLabel.svelte";
@@ -22,7 +22,7 @@
     <Waveform {samples} paused={snapshot.paused} />
     <div class="meta">
       <span>{dateline}</span>
-      <span>笔记将保存到 {snapshot.course} / LectureNotes</span>
+      <span>{destinationLine(snapshot.course, false)}</span>
     </div>
   </section>
   <Transcript transcript={snapshot.transcript} />
@@ -46,7 +46,7 @@
     </div>
   </div>
   <div class="controls">
-    <button class="pause" disabled={busy} onclick={onpause}>
+    <button class="pause" aria-disabled={busy} onclick={onpause}>
       {#if snapshot.paused}
         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
           stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M7 5l12 7-12 7z" /></svg>
@@ -58,7 +58,7 @@
       {/if}
       <kbd>P</kbd>
     </button>
-    <button class="stop" class:armed disabled={busy} onclick={onstop} aria-live="polite">
+    <button class="stop" class:armed aria-disabled={busy} onclick={onstop} aria-live="polite">
       {armed ? "再按一次确认下课" : "下课，生成笔记"}
       <kbd>Q</kbd>
     </button>
@@ -100,7 +100,8 @@
   }
   .pause { padding: 0 26px; border: 1px solid #34363B; background: transparent; color: #ECEAE4; }
   .stop { padding: 0 28px; border: none; background: #D4FF5C; color: #0B0C0E; font-weight: 600; }
-  button:disabled { cursor: progress; }
+  /* aria-disabled, not disabled: a disabled button drops keyboard focus to the page mid-request. */
+  button[aria-disabled="true"] { cursor: progress; }
   kbd { font-family: 'Geist Mono', monospace; font-size: 12px; border-radius: 5px; padding: 2px 7px; }
   .pause kbd { color: #8E9096; border: 1px solid #34363B; }
   .stop kbd { font-weight: 500; border: 1px solid rgba(11, 12, 14, 0.35); }

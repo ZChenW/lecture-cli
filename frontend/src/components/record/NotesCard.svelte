@@ -68,9 +68,6 @@
     border-bottom: 1px solid #23252A;
     color: #ECEAE4;
   }
-  .body :global(.math-block math) { font-family: 'Instrument Serif', serif; }
-  /* Single-letter identifiers would map to Mathematical Italic code points that few fonts carry. */
-  .body :global(.math-block mi) { text-transform: none; }
   .body :global(.review) { display: flex; align-items: flex-start; gap: 10px; font-size: 13px; line-height: 1.6; color: #A9ABB0; }
   .body :global(.review)::before {
     content: "";

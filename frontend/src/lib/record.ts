@@ -73,6 +73,12 @@ export function progressOf(status: string | null | undefined): { done: number; t
   return { done: Math.min(Number(match[1]), Number(match[2])), total: Number(match[2]) };
 }
 
+/** "编写详细笔记 3/7" → "第 3 / 7 章": the stage name is already the row's title. Other texts stay. */
+export function chapterStatus(status: string): string {
+  const progress = progressOf(status);
+  return progress ? `第 ${progress.done} / ${progress.total} 章` : status;
+}
+
 export interface ClosingStage {
   key: string; label: string; state: "done" | "current" | "pending"; status: string;
   seconds: number | null; progress: { done: number; total: number } | null;
@@ -95,14 +101,31 @@ export function closingStages(snapshot: Snapshot, drainStart: number | null): Cl
     draining: { label: "完成末尾转录", status: snapshot.asr.status, progress: null,
       seconds: drainStart != null && drainEnd != null ? drainEnd - drainStart : null },
     refining: { label: "课后离线校正", status: snapshot.refine.status ?? "", progress: null, seconds: span("离线校正") },
-    finalizing: { label: "编写详细笔记", status: snapshot.notes.status, progress: progressOf(snapshot.notes.status),
-      seconds: span("课后笔记") },
+    finalizing: { label: "编写详细笔记", status: chapterStatus(snapshot.notes.status),
+      progress: progressOf(snapshot.notes.status), seconds: span("课后笔记") },
     saving: { label: "保存", status: "正在写入笔记文件", progress: null, seconds: null },
   };
   return order.map((key, index) => ({
     key, ...rows[key],
     state: index < current ? "done" : index === current ? "current" : "pending",
   }));
+}
+
+/** The left column's line under the date: a future tense until the file is really written. */
+export function destinationLine(course: string | null | undefined, saved: boolean): string {
+  return course ? `笔记${saved ? "已" : "将"}保存到 ${course} / LectureNotes` : "";
+}
+
+/**
+ * "课程 / LectureNotes / 文件名" from the output path. The segments are laid out whole, so a line
+ * only ever breaks at a separator, never inside the file name.
+ */
+export function savedPath(output: string | null | undefined, course: string | null | undefined): string[] {
+  const parts = (output ?? "").split("/").filter(Boolean);
+  const file = parts.at(-1) ?? "";
+  if (!file) return [];
+  const folder = parts.at(-2) === "LectureNotes" ? parts.at(-3) : undefined;
+  return [folder ?? course ?? "", "LectureNotes", file].filter(Boolean);
 }
 
 export function stageTime(seconds: number | null): string {

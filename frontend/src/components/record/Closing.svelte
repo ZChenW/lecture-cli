@@ -1,6 +1,6 @@
 <script lang="ts">
   import { formatElapsed } from "../../lib/format";
-  import { closingStages, stageTime } from "../../lib/record";
+  import { closingStages, destinationLine, stageTime } from "../../lib/record";
   import type { Snapshot } from "../../lib/types";
   import StateLabel from "./StateLabel.svelte";
 
@@ -16,7 +16,7 @@
     <div class="timer" data-timer>{formatElapsed(snapshot.elapsed_seconds)}</div>
     <div class="meta">
       <span>{dateline}</span>
-      <span>笔记将保存到 {snapshot.course} / LectureNotes</span>
+      <span>{destinationLine(snapshot.course, false)}</span>
     </div>
   </section>
   <section class="center">
@@ -53,7 +53,7 @@
 <footer class="bar">
   <span class="hint">收尾在后台进行，关闭窗口不会中断</span>
   {#if snapshot.can_skip}
-    <button class="skip" disabled={busy} onclick={onskip}>跳过校正，用实时转录生成笔记</button>
+    <button class="skip" aria-disabled={busy} onclick={() => busy || onskip()}>跳过校正，用实时转录生成笔记</button>
   {/if}
 </footer>
 
@@ -115,5 +115,6 @@
     font-size: 15px;
     cursor: pointer;
   }
+  .skip[aria-disabled="true"] { cursor: progress; }
   @media (prefers-reduced-motion: reduce) { .current .dot { animation: none; } }
 </style>
