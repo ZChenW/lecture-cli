@@ -4,8 +4,8 @@
   import { parseRoute, startRoute, type Route } from "./lib/router";
   import { app, message, refresh } from "./lib/state.svelte";
   import Home from "./pages/Home.svelte";
-  import NotePlaceholder from "./pages/NotePlaceholder.svelte";
-  import Onboarding from "./pages/Onboarding.svelte";
+    import Onboarding from "./pages/Onboarding.svelte";
+  import Reader from "./pages/Reader.svelte";
   import Record from "./pages/Record.svelte";
   import Settings from "./pages/Settings.svelte";
 
@@ -47,7 +47,7 @@
       {:else if route.name === "settings"}
         <Settings />
       {:else if route.name === "notes"}
-        <NotePlaceholder course={route.params[0]} file={route.params[1]} />
+        <Reader course={route.params[0]} file={route.params[1]} />
       {:else}
         <Home />
       {/if}
