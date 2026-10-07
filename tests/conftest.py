@@ -1,4 +1,4 @@
-"""Never let microphone tests change the host's PipeWire volume."""
+"""Never let tests change the host's PipeWire volume or write to its run registry."""
 import subprocess
 import threading
 from types import SimpleNamespace
@@ -28,3 +28,10 @@ def fake_wpctl(monkeypatch):
         run=run, CalledProcessError=subprocess.CalledProcessError,
         TimeoutExpired=subprocess.TimeoutExpired))
     return fake
+
+
+@pytest.fixture(autouse=True)
+def isolated_run_registry(tmp_path, monkeypatch):
+    # Controllers started by tests, in-process or as children, record runs here.
+    monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "state"))
+    return tmp_path / "state" / "lecture-cli" / "runs"

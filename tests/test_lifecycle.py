@@ -11,6 +11,8 @@ from pathlib import Path
 
 import pytest
 
+from lecture_cli import runs
+
 ROOT = Path(__file__).resolve().parents[1]
 
 
@@ -25,13 +27,23 @@ def wait_until(predicate, timeout=12):
 
 
 @pytest.fixture
-def stub_runtime(tmp_path):
+def stub_runtime(tmp_path, isolated_run_registry):
     # Every child is a real Python process. sitecustomize substitutes only external inputs.
     shim = tmp_path / "shim"
     shim.mkdir()
     (shim / "sitecustomize.py").write_text('''
 import sys, time, json, os, re
 from pathlib import Path
+if os.environ.get("LECTURE_TEST_PHASES") and not {"_worker", "_capture", "_demo", "_refine"} & set(sys.argv):
+    # Record every controller state the controller writes, however briefly it lasts.
+    from lecture_cli import storage
+    original_write_json = storage.write_json
+    def write_json(path, value):
+        original_write_json(path, value)
+        if path.name == "controller-state.json":
+            with open(os.environ["LECTURE_TEST_PHASES"], "a") as log:
+                log.write(json.dumps(value) + "\\n")
+    storage.write_json = write_json
 if os.environ.get("LECTURE_TEST_KEYS"):
     for role in ("_worker", "_capture"):
         if role in sys.argv:
@@ -201,6 +213,10 @@ def test_unwritable_output_preserves_tmp_until_recovery(stub_runtime, blocked):
         output = proc.communicate(timeout=15)[0]
         assert proc.returncode == 1
         assert directory.exists() and "尚未成功保存" in output
+        record_path = runs.record_path(runs.run_id(meta["output"]))
+        record = json.loads(record_path.read_text())
+        assert record["status"] == "unsaved" and record["exit_code"] == 1
+        assert record["workspace_kept"] == str(directory)
         if blocked == 'directory':
             moved.rename(target)
         else:
@@ -210,6 +226,7 @@ def test_unwritable_output_preserves_tmp_until_recovery(stub_runtime, blocked):
                                 env=env, capture_output=True, text=True, timeout=10)
         assert result.returncode == 0
         assert not directory.exists()
+        assert json.loads(record_path.read_text())["status"] == "recovered"
         note = Path(meta['output']).read_text()
         # Depending on startup timing, the worker may not have reached the API before
         # the output directory disappeared. Both saved notes and raw fallback are valid.
@@ -307,3 +324,75 @@ def test_demo_uses_configured_openai_compatible_notes_service(tmp_path):
         assert path == "/v1/chat/completions" and auth == "Bearer loopback-test-key"
         assert body["model"] == "fake-notes" and "thinking" not in body
     assert "loopback-test-key" not in result.stdout + note
+
+
+def only_record(registry):
+    records = list(registry.glob("*.json"))
+    assert len(records) == 1
+    return json.loads(records[0].read_text())
+
+
+def test_headless_demo_without_terminal_records_phases_and_run(stub_runtime, tmp_path, isolated_run_registry):
+    root, env = stub_runtime
+    phases = tmp_path / "phases.jsonl"
+    env["LECTURE_TEST_PHASES"] = str(phases)
+    # A new session has no controlling terminal, like a controller started by the GUI.
+    result = subprocess.run([sys.executable, "-m", "lecture_cli", "--courses-dir", str(root),
+                             "demo", "math421", "--headless", "--interval", "1"], env=env,
+                            stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=30,
+                            start_new_session=True)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "笔记将保存到" in result.stdout and "输入音量" not in result.stdout and "[P]" not in result.stdout
+    states = [json.loads(line) for line in phases.read_text().splitlines()]
+    assert [s["phase"] for s in states] == ["starting", "recording", "draining", "finalizing", "saving"]
+    assert all(s["paused"] is False and s["can_skip"] is False for s in states)
+    finalizing = states[3]["stages"]
+    assert [stage["name"] for stage in finalizing] == ["录制与转录", "课后笔记"]
+    assert finalizing[0]["end"] == finalizing[1]["start"] and finalizing[1]["end"] is None
+    assert abs(finalizing[0]["start"] - time.time()) < 60
+    record = only_record(isolated_run_registry)
+    note = Path(record["output"])
+    assert record["run_id"] == note.stem and record["course"] == "MATH421"
+    assert record["status"] == "done" and record["exit_code"] == 0 and record["workspace_kept"] is None
+    assert record["flags"] == {"refinement_failed": False, "has_fallback": False, "detail_incomplete": False}
+    assert [stage["name"] for stage in record["stages"]] == ["录制与转录", "课后笔记"]
+    assert not Path(record["directory"]).exists() and "已结束" in note.read_text()
+    text = json.dumps(record, ensure_ascii=False)
+    assert "eigenvector" not in text.lower() and "synthetic-test-key" not in text
+
+
+def test_headless_start_follows_pause_and_stop_sentinels(stub_runtime, isolated_run_registry):
+    root, env = stub_runtime
+    proc = subprocess.Popen([sys.executable, "-m", "lecture_cli", "--courses-dir", str(root),
+                             "start", "math421", "--headless", "--interval", "1"], env=env,
+                            stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+    try:
+        directory = wait_until(lambda: own_session(root))
+        state = lambda: json.loads((directory / "controller-state.json").read_text())
+        wait_until(lambda: state()["phase"] == "recording")
+        assert state()["paused"] is False
+        record = only_record(isolated_run_registry)
+        assert record["status"] == "running" and record["controller_pid"] == proc.pid
+        assert record["directory"] == str(directory)
+        (directory / "pause").touch()
+        wait_until(lambda: state()["paused"] is True)
+        (directory / "pause").unlink()
+        wait_until(lambda: state()["paused"] is False)
+        (directory / "stop").touch()
+        output = proc.communicate(timeout=15)[0]
+        assert proc.returncode == 0, output
+        assert not directory.exists()
+        record = only_record(isolated_run_registry)
+        assert record["status"] == "done" and "These are the final words." in \
+            Path(record["output"]).with_suffix(".transcript.md").read_text()
+    finally:
+        if proc.poll() is None:
+            proc.kill()
+            proc.wait()
+
+
+def test_headless_requires_course_name(stub_runtime):
+    root, env = stub_runtime
+    result = subprocess.run([sys.executable, "-m", "lecture_cli", "--courses-dir", str(root), "start", "--headless"],
+                            env=env, stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=30)
+    assert result.returncode == 1 and "无头模式需要指定课程名" in result.stdout

@@ -30,12 +30,15 @@ from .audio_buffer import drain_timeout
 from .asr import QWEN_MODELS, asr_models, resolve_asr_model, capture_python, capture_environment
 from .glossary import load_glossary
 from .providers import notes_label
+from . import runs
 from . import config as settings
 
 console = Console()
 
 
 NO_COURSES_DIR = "尚未设置课程目录，请运行 lecture setup 或 lecture gui"
+FALLBACK_NOTICE = "部分内容未完成笔记服务整理，已作为“待整理原文”保存在笔记中。"
+DETAIL_NOTICE = "详细笔记未全部完成；已完成章节及剩余原文已保存在笔记中。"
 
 
 # Thin forwards: tests, scripts and completion still import these from cli.
@@ -92,6 +95,10 @@ def reap_stale_sessions() -> None:
                     journal.close()
                 shutil.rmtree(directory)
                 console.print(f"已恢复上次中断的笔记并清理临时文件：{meta['output']}", markup=False)
+                try:
+                    runs.mark_recovered(meta)
+                except OSError:
+                    pass  # The note is already saved; the registry is only a record of it.
         except BlockingIOError:
             continue  # Another lecture controller is still using this workspace.
         except OSError:
@@ -258,9 +265,49 @@ def session(args, config: dict, course: Path) -> int:
     detail_incomplete = False
     refinement_failed = False
     persisted = False
+    completed = False
+    warnings = []
+    run_id = None
+    headless = getattr(args, "headless", False)
     stages = [("录制与转录", time.monotonic())]
+    wall_offset = time.time() - time.monotonic()
+    controller = {"phase": None, "since": None, "paused": None, "can_skip": False}
     owner_lock = (directory / "owner.lock").open("w")
     fcntl.flock(owner_lock, fcntl.LOCK_EX)
+
+    def publish(phase=None):
+        """controller-state.json changes only with the phase or the pause sentinel."""
+        paused = (directory / "pause").exists()
+        if phase is None and paused == controller["paused"]:
+            return
+        if phase:
+            controller.update(phase=phase, since=time.time(), can_skip=phase == "refining")
+        controller["paused"] = paused
+        write_json(directory / "controller-state.json", dict(controller, stages=[
+            {"name": name, "start": begin + wall_offset, "end": None if end is None else end + wall_offset}
+            for (name, begin), (_, end) in zip(stages, stages[1:] + [(None, None)]) if name]))
+
+    def finish_run(identifier, kept):
+        from .refinement import WARNING
+        marks = stages if not stages[-1][0] else stages + [("", time.monotonic())]
+        notices = warnings + [text for flag, text in ((refinement_failed, WARNING), (has_fallback, FALLBACK_NOTICE),
+                                                      (detail_incomplete, DETAIL_NOTICE)) if flag]
+        try:
+            runs.update(identifier, status="unsaved" if kept else "done" if completed else "failed",
+                        # An exception (including a failed save) leaves session() and main() returns 1.
+                        exit_code=rc if completed and not kept else 1, finished=runs.now(),
+                        stages=[{"name": name, "seconds": round(end - begin, 1)}
+                                for (name, begin), (_, end) in zip(marks, marks[1:])],
+                        flags={"refinement_failed": refinement_failed, "has_fallback": has_fallback,
+                               "detail_incomplete": detail_incomplete},
+                        warnings=notices, workspace_kept=kept)
+        except OSError:
+            console.print("无法更新运行登记。", style="yellow", markup=False)
+
+    def show(stage="", worker_dead=False):
+        # Headless mode never builds the terminal view.
+        if live is not None:
+            live.update(display(directory, stage, worker_dead=worker_dead), refresh=True)
 
     def request_stop(signum, frame):
         nonlocal stop_requested, stop_requests
@@ -291,6 +338,12 @@ def session(args, config: dict, course: Path) -> int:
 
     try:
         write_json(directory / "session.json", meta)
+        publish("starting")
+        try:
+            run_id = runs.begin(meta, directory)
+        except OSError as exc:
+            # Recording does not depend on the registry; only outside observers do.
+            console.print(f"无法写入运行登记（{exc.strerror or exc}），录制照常。", style="yellow", markup=False)
         journal = Journal(directory)
         journal.render()
         journal.close()
@@ -300,22 +353,29 @@ def session(args, config: dict, course: Path) -> int:
         capture = spawn("_demo" if args.command == "demo" else "_capture")
         meta["children"] = [capture.pid, worker.pid]
         write_json(directory / "session.json", meta)
+        publish("recording")
         console.print(f"笔记将保存到：{output}", markup=False)
-        with keyboard() as key, Live(display(directory), console=console, refresh_per_second=4,
-                                     auto_refresh=False, transient=not console.is_terminal) as live:
-            while capture.poll() is None and not stop_requested:
+        with (contextlib.nullcontext(lambda: "") if headless else keyboard()) as key, \
+                (contextlib.nullcontext() if headless else
+                 Live(display(directory), console=console, refresh_per_second=4,
+                      auto_refresh=False, transient=not console.is_terminal)) as live:
+            # An outside process (the GUI) ends the lecture by creating the stop sentinel.
+            while capture.poll() is None and not stop_requested and not (directory / "stop").exists():
                 pressed = key()
                 if pressed == "q":
                     request_stop(None, None)
                 elif pressed == "p":
                     pause = directory / "pause"
                     pause.unlink() if pause.exists() else pause.touch()
-                live.update(display(directory, worker_dead=worker.poll() is not None), refresh=True)
+                publish()
+                show(worker_dead=worker.poll() is not None)
                 time.sleep(0.2)
             (directory / "stop").touch()
+            publish("draining")
             deadline = time.monotonic() + drain_timeout(read_json(directory / "asr-state.json")) + 20
             while capture.poll() is None and time.monotonic() < deadline:
-                live.update(display(directory, "正在完成末尾转录…"), refresh=True)
+                publish()
+                show("正在完成末尾转录…")
                 time.sleep(0.2)
             if capture.poll() is None:
                 capture.kill()
@@ -335,6 +395,7 @@ def session(args, config: dict, course: Path) -> int:
             if meta["refine"]:
                 from .refinement import timeout_seconds, WARNING
                 stages.append(("离线校正", time.monotonic()))
+                publish("refining")
                 if capture.returncode == 0:
                     refinement = spawn("_refine")
                     meta["children"].append(refinement.pid)
@@ -343,10 +404,12 @@ def session(args, config: dict, course: Path) -> int:
                     initial_stop_requests = stop_requests
                     cancelled = False
                     while refinement.poll() is None and time.monotonic() < deadline:
-                        if key() == "q" or stop_requests > initial_stop_requests:
+                        if (key() == "q" or stop_requests > initial_stop_requests
+                                or (directory / "skip-refine").exists()):
                             cancelled = True
                             break
-                        live.update(display(directory, "课后离线校正中 · Q / Ctrl+C 跳过并保存实时记录"), refresh=True)
+                        publish()
+                        show("课后离线校正中 · Q / Ctrl+C 跳过并保存实时记录")
                         time.sleep(0.2)
                     if refinement.poll() is None:
                         state = read_json(directory / "refinement-state.json")
@@ -371,14 +434,17 @@ def session(args, config: dict, course: Path) -> int:
                         "reason": "录音进程异常退出，未启动离线校正"})
             (directory / "capture.done").touch()
             stages.append(("课后笔记", time.monotonic()))
+            publish("finalizing")
             from .final_notes import finish_timeout
             deadline = time.monotonic() + finish_timeout(events(directory), read_json(directory / "notes-state.json").get("cursor", 0))
             if meta["refine"]:
                 deadline += finish_timeout(final_events(directory), 0)
             while worker.poll() is None and time.monotonic() < deadline:
-                live.update(display(directory, "正在保存最后的笔记…"), refresh=True)
+                publish()
+                show("正在保存最后的笔记…")
                 time.sleep(0.2)
             stages.append(("", time.monotonic()))
+        completed = True
     finally:
         # Stop children before deleting their workspace. Also covers Ctrl+C/TERM/HUP and exceptions.
         for process in (capture, refinement, worker):
@@ -391,6 +457,10 @@ def session(args, config: dict, course: Path) -> int:
                     process.wait()
         try:
             if (directory / "session.json").exists():
+                try:
+                    publish("saving")
+                except OSError:
+                    pass  # Saving the notes matters more than announcing it.
                 preserve_tail(directory)
                 journal = Journal(directory)
                 try:
@@ -400,6 +470,7 @@ def session(args, config: dict, course: Path) -> int:
                     if state.get("error") or state.get("warning"):
                         warning = " ".join(filter(None, [state.get("error"), state.get("warning")]))
                         journal.add_warning(warning)
+                        warnings.append(warning)
                         console.print(warning, style="yellow", markup=False)
                     if meta["refine"] and refined_events(directory) is None:
                         from .refinement import WARNING
@@ -416,12 +487,17 @@ def session(args, config: dict, course: Path) -> int:
         finally:
             for log in logs:
                 log.close()
+            kept = None
             try:
                 if persisted or not (directory / "session.json").exists():
                     shutil.rmtree(directory)
                 else:
+                    kept = str(directory)
                     console.print(f"笔记尚未成功保存，暂存于 {directory}；恢复目标目录可写后再运行 lecture，即可恢复并清理。", style="yellow", markup=False)
             finally:
+                # Before the lock is released, so a recovering command's "recovered" is never overwritten.
+                if run_id:
+                    finish_run(run_id, kept)
                 owner_lock.close()
                 for sig, handler in handlers.items():
                     signal.signal(sig, handler)
@@ -434,9 +510,9 @@ def session(args, config: dict, course: Path) -> int:
         from .refinement import WARNING
         console.print(WARNING, style="yellow", markup=False)
     if has_fallback:
-        console.print("部分内容未完成笔记服务整理，已作为“待整理原文”保存在笔记中。", style="yellow")
+        console.print(FALLBACK_NOTICE, style="yellow")
     if detail_incomplete:
-        console.print("详细笔记未全部完成；已完成章节及剩余原文已保存在笔记中。", style="yellow")
+        console.print(DETAIL_NOTICE, style="yellow")
     return rc
 
 
@@ -602,6 +678,8 @@ def main(argv=None):
         sub = subs.add_parser(name, help=help_text)
         if name in ("start", "demo"):
             sub.add_argument("course", nargs="?")
+            sub.add_argument("--headless", action="store_true",
+                             help="不使用终端界面运行，通过会话目录的哨兵文件控制；需指定课程名")
             sub.add_argument("--interval", type=float, help="笔记检查间隔，默认 60 秒")
             sub.add_argument("--context", help="笔记背景文本（最多 12000 字符）；ASR 使用课程 glossary.json")
         if name in ("start", "prepare", "doctor"):
@@ -718,6 +796,8 @@ def main(argv=None):
             return 0 if result["ok"] else 1
         else:
             courses_root()
+            if args.headless and not args.course:
+                raise ValueError("无头模式需要指定课程名")
             if args.command == "start" and config["asr_backend"] == "api":
                 config["refine"] = False
                 if not os.environ.get("LECTURE_ASR_API_KEY"):

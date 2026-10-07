@@ -114,8 +114,8 @@ def test_non_silent_empty_result_is_failure(tmp_path):
     assert "24 AC" in final_events(tmp_path)[0]["text"]
 
 
-@pytest.mark.parametrize("mode", ["success", "failure", "cancel"])
-def test_real_controller_waits_for_refine_and_cleans_audio(tmp_path, mode):
+@pytest.mark.parametrize("mode", ["success", "failure", "cancel", "skip"])
+def test_real_controller_waits_for_refine_and_cleans_audio(tmp_path, mode, isolated_run_registry):
     fail = mode != "success"
     root = Path(__file__).resolve().parents[1]
     shim = tmp_path / "shim"
@@ -174,18 +174,27 @@ if "_worker" in sys.argv:
     if fail:
         env["REFINE_TEST_FAIL"] = "1"
     marker = tmp_path / "refine.started"
-    if mode == "cancel":
+    if mode in ("cancel", "skip"):
         env["REFINE_TEST_CANCEL"] = str(marker)
     process = subprocess.Popen([sys.executable, "-m", "lecture_cli", "--courses-dir", str(courses),
-                                "start", "MATH421", "--refine"], env=env,
-                               stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+                                "start", "MATH421", "--refine"] + (["--headless"] if mode == "skip" else []),
+                               env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
     try:
-        if mode == "cancel":
+        if mode in ("cancel", "skip"):
             deadline = time.monotonic() + 10
             while not marker.exists() and process.poll() is None and time.monotonic() < deadline:
                 time.sleep(0.05)
             assert marker.exists()
+        if mode == "cancel":
             process.send_signal(signal.SIGINT)
+        elif mode == "skip":
+            # An outside observer sees a skippable phase and asks to skip it.
+            directory = next(path for path in Path("/tmp").glob(f"lecture-{os.getuid()}-*")
+                             if str(courses) in read_json(path / "session.json").get("output", ""))
+            state = read_json(directory / "controller-state.json")
+            assert state["phase"] == "refining" and state["can_skip"] is True
+            assert [stage["name"] for stage in state["stages"]] == ["录制与转录", "离线校正"]
+            (directory / "skip-refine").touch()
         stdout, stderr = process.communicate(timeout=25)
         assert process.returncode == 0, stdout + stderr
     finally:
@@ -198,7 +207,11 @@ if "_worker" in sys.argv:
     assert "LIVE_SOURCE" in note_path.with_suffix('.transcript.md').read_text()
     assert ("CORRECTED_SOURCE" in note) is not fail
     assert (refinement.WARNING in note) is fail
-    if mode == "cancel":
+    if mode in ("cancel", "skip"):
         assert "用户跳过" in note_path.with_suffix('.review.md').read_text()
+    record = json.loads(next(isolated_run_registry.glob("*.json")).read_text())
+    assert record["status"] == "done" and record["flags"]["refinement_failed"] is fail
+    assert [stage["name"] for stage in record["stages"]] == ["录制与转录", "离线校正", "课后笔记"]
+    assert (refinement.WARNING in record["warnings"]) is fail
     for directory in Path("/tmp").glob(f"lecture-{os.getuid()}-*"):
         assert str(courses) not in str(read_json(directory / "session.json"))
