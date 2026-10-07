@@ -147,6 +147,10 @@ async def body_of(request: Request, required=True) -> dict:
     return value
 
 
+def same_base(left: str, right: str) -> bool:
+    return left.strip().rstrip("/") == right.strip().rstrip("/")
+
+
 def problems_of(config: dict) -> list[dict]:
     return [{"field": p.field, "message": p.message} for p in settings.validate(config)]
 
@@ -250,11 +254,16 @@ def create_app(port: int, token: str, *, on_quit=None, sessions: Sessions | None
             if field in changes and not isinstance(changes[field], str):
                 raise ApiError(422, "invalid_request", f"{field} 必须是字符串", field)
         config = settings.load()
+        key = changes.get("key", "").strip()
+        saved_base = config.get(f"{kind}_api_base") or ""
+        if "api_base" in changes and not same_base(changes["api_base"], saved_base) and not key:
+            # The saved key belongs to the saved service; never hand it to another host.
+            raise ApiError(422, "key_required", "测试其他服务地址时必须同时填写 key", "key")
         if "api_base" in changes:
             config[f"{kind}_api_base"] = changes["api_base"]
         if "model" in changes:
             config["notes_model" if kind == "notes" else "asr_api_model"] = changes["model"]
-        key = changes.get("key") or settings.read_key(kind)[0]
+        key = key or settings.read_key(kind)[0]
         test = test_notes if kind == "notes" else test_asr
         return JSONResponse(asdict(await run_in_threadpool(test, config, key, transport)))
 

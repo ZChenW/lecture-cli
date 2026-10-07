@@ -227,6 +227,29 @@ def test_key_endpoints_never_return_key_values(home, serve, tmp_path, monkeypatc
     assert app.client.put("/api/keys/other", json={"value": "x"}, headers=app.origin).status_code == 404
 
 
+
+def test_connection_test_never_sends_the_saved_key_to_another_host(home, serve):
+    seen = []
+
+    def service(request):
+        seen.append((request.url.host, request.headers["authorization"]))
+        return httpx.Response(200, json={"data": [{"id": "deepseek-flash"}]})
+
+    app = serve(transport=httpx.MockTransport(service))
+    app.login()
+    save_config(home)
+    app.client.put("/api/keys/notes", json={"value": SECRET}, headers=app.origin)
+    for body in ({"api_base": "https://evil.example/v1"}, {"api_base": "https://evil.example/v1", "key": "  "}):
+        refused = app.post("/api/test/notes", body)
+        assert refused.status_code == 422 and refused.json()["error"]["field"] == "key"
+    assert seen == []
+    assert app.post("/api/test/notes", {"api_base": "https://evil.example/v1", "key": "typed-0000"}).status_code == 200
+    assert seen.pop() == ("evil.example", "Bearer typed-0000")
+    # The saved address (even with a trailing slash) keeps using the saved key.
+    for body in ({}, {"api_base": "https://api.deepseek.com/"}, {"model": "other"}):
+        assert app.post("/api/test/notes", body).status_code == 200
+        assert seen.pop() == ("api.deepseek.com", f"Bearer {SECRET}")
+
 def write_note(course, stem="2026-10-07_143000-课堂笔记-a1b2c3", attachments=("transcript",)):
     folder = course / "LectureNotes"
     folder.mkdir(exist_ok=True)
