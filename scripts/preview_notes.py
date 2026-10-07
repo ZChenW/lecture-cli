@@ -18,7 +18,7 @@ def main():
     parser.add_argument('--replay', type=Path, help='本地重放已保存的构造样例响应，不调用 API')
     args = parser.parse_args()
     saved = json.loads(args.replay.read_text()) if args.replay else None
-    config = {'model': saved['responses'][0]['model']} if saved else configuration()
+    config = {'notes_model': saved['responses'][0]['model']} if saved else configuration()
     fixture = Path(__file__).resolve().parents[1] / 'examples' / 'math481'
     records = json.loads((fixture / 'source.json').read_text())
     output = args.output.resolve()
@@ -40,7 +40,7 @@ def main():
         directory = Path(temporary)
         write_json(directory / 'session.json', dict(
             course='MATH481 构造验收样例', started='2026-09-25', demo=True,
-            output=str(output), model=config['model'], **load_glossary(fixture)))
+            output=str(output), notes_model=config['notes_model'], **load_glossary(fixture)))
         atomic_text(directory / 'transcript.jsonl', ''.join(json.dumps(r) + '\n' for r in records))
         journal = Journal(directory)
         try:

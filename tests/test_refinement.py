@@ -15,7 +15,7 @@ from lecture_cli.worker import APIError
 
 
 def session(root):
-    write_json(root / "session.json", dict(course="MATH421", started="today", model="deepseek-flash",
+    write_json(root / "session.json", dict(course="MATH421", started="today", notes_model="deepseek-flash",
                output=str(root / "notes.md"), refine=True, language="en"))
     (root / "transcript.jsonl").write_text(json.dumps(dict(id=1, start="00:00:00", end="00:01:01",
                                                          text="24 AC live error")) + "\n")
@@ -124,7 +124,7 @@ def test_real_controller_waits_for_refine_and_cleans_audio(tmp_path, mode):
 import sys, json, os
 from pathlib import Path
 from lecture_cli import cli
-cli.capture_python = lambda model: sys.executable
+cli.capture_python = lambda model, *args: sys.executable
 if "_capture" in sys.argv:
     from lecture_cli import capture
     from lecture_cli.storage import write_json

@@ -81,7 +81,7 @@ def plan_topics(journal, records, call):
                   f"此前原文：\n{source_text(records[max(0, chunk[0]['id'] - 6):chunk[0]['id'] - 1])[-2000:]}\n"
                   f"本批完整原文：\n{source_text(chunk)}")
         response = call([{"role": "system", "content": PLAN_SYSTEM},
-                         {"role": "user", "content": prompt}], journal.meta["model"], PLAN_TOKENS)
+                         {"role": "user", "content": prompt}], journal.meta["notes_model"], PLAN_TOKENS)
         try:
             result = json.loads(response)
             additions = result["topics"]
@@ -174,7 +174,7 @@ def generate(journal, records, call=None, workers=1):
         return checked_completion([
             {"role": "system", "content": FINAL_SYSTEM},
             {"role": "user", "content": prompt},
-        ], journal.meta["model"], records[-1]["id"],
+        ], journal.meta["notes_model"], records[-1]["id"],
             lambda messages, model, tokens: section_response(messages, model, tokens, call), FINAL_TOKENS,
             allowed_sources={r['id'] for r in previous + chunk + following})
 

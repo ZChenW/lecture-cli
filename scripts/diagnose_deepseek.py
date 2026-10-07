@@ -59,9 +59,9 @@ def main():
                 if mode == 'models':
                     response = client.get('https://api.deepseek.com/models', headers=headers)
                     emit(mode=mode, http=response.status_code, elapsed=round(time.monotonic()-began, 2),
-                         selected_model_listed=any(item.get('id') == config['model'] for item in response.json().get('data', [])))
+                         selected_model_listed=any(item.get('id') == config['notes_model'] for item in response.json().get('data', [])))
                     continue
-                body = dict(model=config['model'], messages=[dict(role='user', content='Reply only with OK.')],
+                body = dict(model=config['notes_model'], messages=[dict(role='user', content='Reply only with OK.')],
                             max_tokens=16, thinking={'type': 'disabled'}, stream=mode == 'stream')
                 with client.stream('POST', 'https://api.deepseek.com/chat/completions', headers=headers, json=body) as response:
                     emit(mode=mode, phase='headers', http=response.status_code, elapsed=round(time.monotonic()-began, 2),

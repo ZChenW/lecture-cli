@@ -8,6 +8,7 @@ from pathlib import Path
 
 from .storage import atomic_text, read_json, write_json
 
+# Default only; each session reads refine_model from its configuration snapshot.
 MODEL = "qwen3-asr-1.7b"
 BYTES_PER_SECOND = 32000
 MAX_ARCHIVE_BYTES = 512 * 1024 * 1024
@@ -104,7 +105,7 @@ def refine(directory: Path, transcribe=None) -> int:
             from .asr import select_qwen_device, QWEN_MODELS
             device, _ = select_qwen_device(meta.get("asr_device", "auto"))
             model = Qwen3ASRModel.from_pretrained(
-                QWEN_MODELS[MODEL], dtype="bfloat16" if device == "cuda" else "float32",
+                QWEN_MODELS[meta.get("refine_model", MODEL)], dtype="bfloat16" if device == "cuda" else "float32",
                 device_map="cuda:0" if device == "cuda" else "cpu",
                 max_inference_batch_size=BATCH, max_new_tokens=1024,
             )

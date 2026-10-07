@@ -38,7 +38,7 @@ lecture doctor --asr-device cuda        # 检查 GPU 可见性与运行库，不
 ```sh
 ./install.sh --api                       # 只装基础依赖，不装本地模型和 torch
 export LECTURE_ASR_API_KEY='你的转录服务 key'
-export DEEPSEEK_API_KEY='你的笔记服务 key'
+export LECTURE_NOTES_API_KEY='你的笔记服务 key'
 lecture doctor --asr-backend api         # 验证转录服务，不录音
 lecture start MATH421 --asr-backend api
 lecture start MATH421 --asr-backend api --asr-api-model whisper-large-v3-turbo
@@ -132,7 +132,7 @@ lecture devices
 lecture start math421 --device pipewire
 ```
 
-`setup` 隐藏输入 API key，存入权限为 600 的配置文件；环境变量 `DEEPSEEK_API_KEY` 优先。已有可用环境变量时不必运行 setup。不要把 key 写进命令参数。实际课堂文字会发送到 DeepSeek，使用 API 额度。
+`setup` 隐藏输入 API key，存入权限为 600 的配置文件 `notes-api-key`；环境变量 `LECTURE_NOTES_API_KEY` 优先。旧的变量 `DEEPSEEK_API_KEY` 和旧文件 `api-key` 仍可使用，优先级排在新名称之后。已有可用环境变量时不必运行 setup。不要把 key 写进命令参数。实际课堂文字会发送到 DeepSeek，使用 API 额度。
 
 可选参数：
 
@@ -184,14 +184,14 @@ lecture diagnose-asr MATH421 --audio-file /path/to/sample.wav --seconds 60
 
 ## 保存规则
 
-默认根目录为当前用户的 `~/Downloads/Umass_CS_Class`，自动列出其下非隐藏、非符号链接的文件夹。模型默认 `base.en`，优先 NVIDIA GPU / FP16，CPU 备用；笔记默认 `deepseek-flash`，关闭 thinking，约每 60 秒检查新增转录。
+课程根目录由 `lecture setup` 设置（配置项 `courses_dir`，没有默认值；未设置时需要课程的命令会提示先运行 setup。从旧版配置升级时，若 `~/Downloads/Umass_CS_Class` 存在则沿用），自动列出其下非隐藏、非符号链接的文件夹。旧版 `config.json` 首次读取时会自动升级，原文件另存为 `config.json.v1.bak`。模型默认 `base.en`，优先 NVIDIA GPU / FP16，CPU 备用；笔记默认 `deepseek-flash`，关闭 thinking，约每 60 秒检查新增转录。
 
 界面中的“转录积压”包括正在识别的音频和等待识别的音频；录制时长按实际接收的音频计算。缓存修复不会提高模型本身的识别速度；若积压持续增长，下课后的收尾也会更久。
 
 随堂整理会把相邻短片段合并为段落再发送，保留每个来源编号。到检查时间后优先等到句末或明显停顿，最多再等 30 秒（检查间隔小于 30 秒时最多等一个间隔）；结束录制时立即处理剩余文字。每批通常上限 6,000 字符，大片积压分批连续处理。界面的“待整理内容”是原始片段数量，不是 API 请求数；“本批合并”显示当前请求合并了多少片段与字符。合并依据标点、时间间隔和长度，不保证与知识点边界完全一致。
 
 ```text
-~/Downloads/Umass_CS_Class/MATH421/LectureNotes/
+<课程目录>/MATH421/LectureNotes/
 ├── 2026-09-14_143000-课堂笔记-a1b2c3.md
 ├── 2026-09-14_143000-课堂笔记-a1b2c3.transcript.md
 ├── 2026-09-14_143000-课堂笔记-a1b2c3.live.md

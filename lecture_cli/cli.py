@@ -29,29 +29,28 @@ from .storage import Journal, events, final_events, refined_events, read_json, w
 from .audio_buffer import drain_timeout
 from .asr import QWEN_MODELS, asr_models, resolve_asr_model, capture_python, capture_environment
 from .glossary import load_glossary
+from . import config as settings
 
 console = Console()
 
 
+NO_COURSES_DIR = "尚未设置课程目录，请运行 lecture setup 或 lecture gui"
+
+
+# Thin forwards: tests, scripts and completion still import these from cli.
 def config_dir() -> Path:
-    return Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config")) / "lecture-cli"
+    return settings.config_dir()
 
 
 def configuration(load_key=True) -> dict:
-    result = {"courses_dir": str(Path.home() / "Downloads" / "Umass_CS_Class"),
-              "model": "deepseek-flash", "asr_model": "base.en", "language": "en",
-              "interval": 60, "device": None, "asr_device": "auto", "refine": False, "auto_gain": True,
-              "asr_backend": "local", "asr_api_base": "https://api.groq.com/openai/v1",
-              "asr_api_model": "whisper-large-v3-turbo"}
-    result.update(read_json(config_dir() / "config.json"))
+    result = settings.load()
     if load_key:
-        for variable, filename in (("DEEPSEEK_API_KEY", "api-key"),
-                                   ("LECTURE_ASR_API_KEY", "asr-api-key")):
-            if not os.environ.get(variable):
-                key_file = config_dir() / filename
-                if key_file.exists():
-                    os.environ[variable] = key_file.read_text().strip()
+        settings.load_keys()
     return result
+
+
+def save_config(config) -> None:
+    settings.save(config)
 
 
 def reap_stale_sessions() -> None:
@@ -275,15 +274,15 @@ def session(args, config: dict, course: Path) -> int:
         python = sys.executable
         if role == "_capture" and meta.get("asr_backend") != "api":
             env = capture_environment(meta["asr_model"], env)
-            python = capture_python(meta["asr_model"])
+            python = capture_python(meta["asr_model"], meta.get("qwen_python"))
         elif role == "_refine":
-            from .refinement import MODEL
-            env = capture_environment(MODEL, env)
+            env = capture_environment(meta["refine_model"], env)
             env["HF_HUB_OFFLINE"] = "1"
-            python = capture_python(MODEL)
+            python = capture_python(meta["refine_model"], meta.get("qwen_python"))
         if role != "_capture" or meta.get("asr_backend") != "api":
             env.pop("LECTURE_ASR_API_KEY", None)
         if role != "_worker":
+            env.pop("LECTURE_NOTES_API_KEY", None)
             env.pop("DEEPSEEK_API_KEY", None)
         return subprocess.Popen([python, "-m", "lecture_cli", role, str(directory)],
                                 stdin=subprocess.DEVNULL, stdout=log, stderr=log,
@@ -443,9 +442,13 @@ def session(args, config: dict, course: Path) -> int:
 def setup(config):
     if not sys.stdin.isatty():
         raise ValueError("setup 需要交互终端")
-    root = console.input(f"课程目录 [{config['courses_dir']}]：", markup=False).strip()
+    current = config.get("courses_dir")
+    # Without a saved folder there is no sensible default to offer; the user must type one.
+    root = console.input(f"课程目录 [{current}]：" if current else "课程目录：", markup=False).strip()
     if root:
         config["courses_dir"] = str(Path(root).expanduser().resolve())
+    elif not current:
+        raise ValueError("必须输入课程目录")
     course_paths(Path(config["courses_dir"]))
     config["asr_model"] = choose_asr_model(config.get("asr_model", "base.en"))
     devices()
@@ -454,8 +457,7 @@ def setup(config):
     key = getpass.getpass("DeepSeek API key（留空保留现有配置）：").strip()
     save_config(config)
     if key:
-        from .storage import atomic_text
-        atomic_text(config_dir() / "api-key", key + "\n")
+        settings.write_key("notes", key)
     console.print("配置已保存。运行 lecture start 选择课程并开始。")
 
 
@@ -521,12 +523,6 @@ def _curses_model_menu(stdscr, names: tuple[str, ...], index: int, current: str)
         # Ignore ESC and other CSI leftovers; keypad() already maps real arrows.
 
 
-def save_config(config) -> None:
-    directory = config_dir()
-    directory.mkdir(parents=True, exist_ok=True, mode=0o700)
-    write_json(directory / "config.json", config)
-
-
 def devices():
     import sounddevice as sd
     for i, device in enumerate(sd.query_devices()):
@@ -542,8 +538,8 @@ def doctor(config):
         console.print(f"✓ 默认源麦克风音量：{volume:.0%}" + ("（已静音）" if muted else ""), markup=False)
     except VolumeError as exc:
         console.print("✗ 默认源麦克风音量：" + str(exc), markup=False)
-    checks = {"课程目录": Path(config["courses_dir"]).is_dir(),
-              "DeepSeek key": bool(os.environ.get("DEEPSEEK_API_KEY")),
+    checks = {"课程目录": bool(config["courses_dir"]) and Path(config["courses_dir"]).is_dir(),
+              "DeepSeek key": bool(os.environ.get("LECTURE_NOTES_API_KEY")),
               "FFmpeg": bool(shutil.which("ffmpeg"))}
     if config.get("asr_backend") == "api":
         import httpx
@@ -561,7 +557,7 @@ def doctor(config):
     else:
         checks["WhisperLiveKit"] = importlib.util.find_spec("whisperlivekit") is not None
         try:
-            probe = subprocess.run([capture_python(config["asr_model"]), "-m", "lecture_cli.asr", config.get("asr_device", "auto"), config["asr_model"]],
+            probe = subprocess.run([capture_python(config["asr_model"], config.get("qwen_python")), "-m", "lecture_cli.asr", config.get("asr_device", "auto"), config["asr_model"]],
                                    env=capture_environment(config["asr_model"]), capture_output=True, text=True, timeout=30)
             result = json.loads(probe.stdout)
             checks["识别设备检查"] = probe.returncode == 0
@@ -597,7 +593,10 @@ def main(argv=None):
         return 0
     if argv and argv[0] == "_complete-courses":
         # Completion must never recover sessions, read credentials or open audio hardware.
-        root = Path(argv[1]).expanduser() if len(argv) > 1 else Path(configuration(load_key=False)["courses_dir"]).expanduser()
+        saved = configuration(load_key=False).get("courses_dir")
+        if len(argv) < 2 and not saved:
+            return 0
+        root = Path(argv[1] if len(argv) > 1 else saved).expanduser()
         try:
             for path in course_paths(root):
                 if not any(c in path.name for c in "\n\r\t"):
@@ -680,23 +679,26 @@ def main(argv=None):
             config[field] = getattr(args, field)
     if isinstance(config["device"], str) and config["device"].isdigit():
         config["device"] = int(config["device"])
-    root = Path(config["courses_dir"]).expanduser().resolve()
-    config["courses_dir"] = str(root)
+    root = None
+    if config["courses_dir"]:
+        root = Path(config["courses_dir"]).expanduser().resolve()
+        config["courses_dir"] = str(root)
+
+    def courses_root() -> Path:
+        if root is None:
+            raise ValueError(NO_COURSES_DIR)
+        return root
+
     try:
-        if not 1 <= config["interval"] <= 3600:
-            raise ValueError("间隔必须在 1–3600 秒之间")
-        if config["asr_backend"] not in ("local", "api"):
-            raise ValueError("采集后端必须为 local 或 api")
-        if config["asr_backend"] == "api" and (
-                not isinstance(config["asr_api_base"], str) or
-                not config["asr_api_base"].startswith(("https://", "http://")) or
-                not isinstance(config["asr_api_model"], str) or not config["asr_api_model"].strip()):
-            raise ValueError("云端转录须配置 HTTP(S) 地址和非空模型名称")
+        # The courses folder is checked by the commands that need it, so setup can still fix it.
+        problems = [p for p in settings.validate(config) if p.field != "courses_dir"]
+        if problems:
+            raise ValueError(problems[0].message)
         if args.command == "prepare" or (args.command in ("start", "doctor", "demo")
                                          and config["asr_backend"] == "local"):
             config["asr_model"] = resolve_asr_model(config["asr_model"])
         if args.command == "courses":
-            for p in course_paths(root):
+            for p in course_paths(courses_root()):
                 console.print(p.name, markup=False)
         elif args.command == "models":
             if not sys.stdin.isatty():
@@ -730,7 +732,7 @@ def main(argv=None):
             context = ""
             if args.context:
                 context = Path(args.context).expanduser().read_text()
-            course = select_course(root, args.course)
+            course = select_course(courses_root(), args.course)
             if not args.audio_file:
                 console.print(f"将从麦克风录制 {args.seconds} 秒；Ctrl+C 可取消。", markup=False)
             result = run_diagnostic(
@@ -750,19 +752,19 @@ def main(argv=None):
                 console.print("原始诊断音频已从 /tmp 自动删除。", markup=False)
             return 0 if result["ok"] else 1
         else:
+            courses_root()
             if args.command == "start" and config["asr_backend"] == "api":
                 config["refine"] = False
                 if not os.environ.get("LECTURE_ASR_API_KEY"):
                     raise ValueError("缺少转录 key，请设置 LECTURE_ASR_API_KEY 或写入配置目录的 asr-api-key 文件")
             if args.command == "start" and config["asr_backend"] == "local":
-                capture_python(config["asr_model"])
+                capture_python(config["asr_model"], config.get("qwen_python"))
                 if config.get("refine"):
-                    from .refinement import MODEL
-                    capture_python(MODEL)
+                    capture_python(config["refine_model"], config.get("qwen_python"))
                 if config["asr_model"] in QWEN_MODELS and config["language"] == "auto":
                     raise ValueError("Qwen 流式识别需要 --language en 或 zh")
-            if not os.environ.get("DEEPSEEK_API_KEY"):
-                raise ValueError("缺少 DeepSeek key，请先运行 lecture setup 或设置 DEEPSEEK_API_KEY")
+            if not os.environ.get("LECTURE_NOTES_API_KEY"):
+                raise ValueError("缺少 DeepSeek key，请先运行 lecture setup 或设置 LECTURE_NOTES_API_KEY")
             return session(args, config, select_course(root, args.course))
         return 0
     except (ValueError, OSError) as exc:

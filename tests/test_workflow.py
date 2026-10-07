@@ -14,7 +14,7 @@ def lecture(tmp_path):
     directory = tmp_path / 'session'
     directory.mkdir()
     write_json(directory / 'session.json', dict(course='MATH481', started='synthetic',
-               model='deepseek-flash', output=str(tmp_path / 'notes.md')))
+               notes_model='deepseek-flash', output=str(tmp_path / 'notes.md')))
     source = [dict(id=i, start=f'00:00:{i:02}', end=f'00:00:{i+1:02}',
                    text=f'Original statement {i}.') for i in range(1, 9)]
     (directory / 'transcript.jsonl').write_text(''.join(json.dumps(r) + '\n' for r in source))

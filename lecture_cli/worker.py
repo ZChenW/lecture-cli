@@ -79,9 +79,9 @@ def checked_completion(messages: list[dict], model: str, max_source: int, call, 
 
 
 def complete(messages: list[dict], model: str, max_tokens: int = 2000) -> str:
-    key = os.environ.get("DEEPSEEK_API_KEY", "")
+    key = os.environ.get("LECTURE_NOTES_API_KEY", "")
     if not key:
-        raise APIError("缺少 DEEPSEEK_API_KEY")
+        raise APIError("缺少 LECTURE_NOTES_API_KEY")
     try:
         with httpx.Client(timeout=httpx.Timeout(120 if max_tokens > 2000 else 30, connect=10), follow_redirects=False) as client:
             response = client.post(
@@ -124,7 +124,7 @@ def process_batch(journal: Journal, records: list[dict], call=None, *, batch=Non
               f"此前原文（仅上下文）：\n{source_text(previous)[-3000:]}\n\n"
               f"本批新增转录：\n{merged_source_text(batch)}")
     body = checked_completion([{"role": "system", "content": SYSTEM}, {"role": "user", "content": prompt}],
-                              journal.meta["model"], batch[-1]["id"], call,
+                              journal.meta["notes_model"], batch[-1]["id"], call,
                               allowed_sources=supplied)
     # The journal transaction commits content and cursor together. Rendering is replayable.
     journal.save(batch, body)

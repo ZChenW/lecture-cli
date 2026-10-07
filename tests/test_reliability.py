@@ -15,7 +15,7 @@ def session(tmp_path):
     directory = tmp_path / "session"
     directory.mkdir()
     write_json(directory / "session.json", {"course": "MATH421", "started": "2026-09-14",
-               "output": str(tmp_path / "notes.md"), "model": "deepseek-flash", "interval": 1})
+               "output": str(tmp_path / "notes.md"), "notes_model": "deepseek-flash", "interval": 1})
     return directory
 
 
@@ -217,7 +217,7 @@ def test_reject_truncated_or_empty_api_output(reply, monkeypatch):
         def post(self, url, **kwargs):
             assert kwargs["json"]["thinking"] == {"type": "disabled"}
             return SimpleNamespace(status_code=200, json=lambda: reply)
-    monkeypatch.setenv("DEEPSEEK_API_KEY", "test-only")
+    monkeypatch.setenv("LECTURE_NOTES_API_KEY", "test-only")
     monkeypatch.setattr(worker.httpx, "Client", Client)
     with pytest.raises(worker.APIError):
         worker.complete([], "deepseek-flash")
@@ -239,7 +239,7 @@ def test_only_network_and_server_failures_are_marked_transient(failure, transien
             if isinstance(failure, Exception):
                 raise failure
             return SimpleNamespace(status_code=failure)
-    monkeypatch.setenv("DEEPSEEK_API_KEY", "test-only")
+    monkeypatch.setenv("LECTURE_NOTES_API_KEY", "test-only")
     monkeypatch.setattr(worker.httpx, "Client", Client)
     with pytest.raises(worker.APIError) as caught:
         worker.complete([], "deepseek-flash")

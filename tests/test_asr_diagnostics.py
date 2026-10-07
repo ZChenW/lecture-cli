@@ -7,6 +7,7 @@ import pytest
 
 from lecture_cli import cli
 from lecture_cli import asr_diagnostics as diagnostics
+from lecture_cli.config import DEFAULTS
 
 
 def wav(path: Path, samples, rate=16000):
@@ -124,9 +125,7 @@ def test_cli_diagnostic_does_not_load_deepseek_credentials(tmp_path, monkeypatch
 
     def config(load_key=True):
         calls.append(load_key)
-        return {"courses_dir": str(tmp_path), "model": "deepseek-flash",
-                "asr_model": "base.en", "language": "en", "interval": 60,
-                "device": None, "asr_device": "auto", "asr_backend": "local"}
+        return dict(DEFAULTS, courses_dir=str(tmp_path), asr_model="base.en")
 
     monkeypatch.setattr(cli, "configuration", config)
     monkeypatch.setattr(cli, "reap_stale_sessions", lambda: None)
