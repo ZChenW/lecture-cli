@@ -8,7 +8,7 @@
 
 ```sh
 lecture courses           # 查看已有课程
-lecture doctor            # 检查本地环境，不录音、不调用 API
+lecture doctor            # 检查本地环境与服务连接（只请求 /models），不录音、不生成笔记
 lecture diagnose-asr MATH421 --seconds 30  # 同一段音频对比两个 ASR，不调用 DeepSeek
 lecture start             # 选择课程，开始录制
 lecture start math421     # 直接选择 MATH421

@@ -29,6 +29,7 @@ from .storage import Journal, events, final_events, refined_events, read_json, w
 from .audio_buffer import drain_timeout
 from .asr import QWEN_MODELS, asr_models, resolve_asr_model, capture_python, capture_environment
 from .glossary import load_glossary
+from .providers import notes_label
 from . import config as settings
 
 console = Console()
@@ -168,7 +169,7 @@ def display(directory: Path, stage: str = "", worker_dead=False):
         table.add_row("音频暂存", f"{asr['queued']:.1f} 秒音频等待转录")
     if asr.get("warning"):
         table.add_row("收音提示", Text(asr["warning"]))
-    table.add_row("DeepSeek", Text("进程已退出，结束时保存待整理原文" if worker_dead else notes.get("status", "等待新增转录")))
+    table.add_row(notes_label(meta), Text("进程已退出，结束时保存待整理原文" if worker_dead else notes.get("status", "等待新增转录")))
     table.add_row("待整理内容", f"{max(0, asr.get('count', 0) - notes.get('cursor', 0))} 个来源片段")
     if notes.get("batch_segments"):
         table.add_row("本批合并", f"{notes['batch_segments']} 个片段 · {notes['batch_chars']} 字符")
@@ -433,7 +434,7 @@ def session(args, config: dict, course: Path) -> int:
         from .refinement import WARNING
         console.print(WARNING, style="yellow", markup=False)
     if has_fallback:
-        console.print("部分内容未完成 DeepSeek 整理，已作为“待整理原文”保存在笔记中。", style="yellow")
+        console.print("部分内容未完成笔记服务整理，已作为“待整理原文”保存在笔记中。", style="yellow")
     if detail_incomplete:
         console.print("详细笔记未全部完成；已完成章节及剩余原文已保存在笔记中。", style="yellow")
     return rc
@@ -454,7 +455,7 @@ def setup(config):
     devices()
     answer = console.input("麦克风编号或名称 [系统默认]：", markup=False).strip()
     config["device"] = int(answer) if answer.isdigit() else answer or None
-    key = getpass.getpass("DeepSeek API key（留空保留现有配置）：").strip()
+    key = getpass.getpass("笔记服务 API key（留空保留现有配置）：").strip()
     save_config(config)
     if key:
         settings.write_key("notes", key)
@@ -531,50 +532,14 @@ def devices():
 
 
 def doctor(config):
-    import importlib.util
-    from .mic_gain import read_volume, VolumeError
-    try:
-        volume, muted = read_volume()
-        console.print(f"✓ 默认源麦克风音量：{volume:.0%}" + ("（已静音）" if muted else ""), markup=False)
-    except VolumeError as exc:
-        console.print("✗ 默认源麦克风音量：" + str(exc), markup=False)
-    checks = {"课程目录": bool(config["courses_dir"]) and Path(config["courses_dir"]).is_dir(),
-              "DeepSeek key": bool(os.environ.get("LECTURE_NOTES_API_KEY")),
-              "FFmpeg": bool(shutil.which("ffmpeg"))}
-    if config.get("asr_backend") == "api":
-        import httpx
-        from .api_capture import API_TIMEOUT
-        checks["转录 key"] = bool(os.environ.get("LECTURE_ASR_API_KEY"))
-        checks["转录服务"] = False
-        if checks["转录 key"]:
-            try:
-                with httpx.Client(timeout=API_TIMEOUT) as client:
-                    response = client.get(config["asr_api_base"].rstrip("/") + "/models",
-                                          headers={"Authorization": "Bearer " + os.environ["LECTURE_ASR_API_KEY"]})
-                checks["转录服务"] = response.status_code == 200
-            except httpx.RequestError:
-                pass
-    else:
-        checks["WhisperLiveKit"] = importlib.util.find_spec("whisperlivekit") is not None
-        try:
-            probe = subprocess.run([capture_python(config["asr_model"], config.get("qwen_python")), "-m", "lecture_cli.asr", config.get("asr_device", "auto"), config["asr_model"]],
-                                   env=capture_environment(config["asr_model"]), capture_output=True, text=True, timeout=30)
-            result = json.loads(probe.stdout)
-            checks["识别设备检查"] = probe.returncode == 0
-            precision = "BF16" if config["asr_model"] in QWEN_MODELS else "FP16"
-            console.print("识别设备：" + (f"NVIDIA GPU · {precision}" if result.get("device") == "cuda" else
-                                         result.get("error") or result.get("notice") or "CPU"), markup=False)
-        except (OSError, ValueError, subprocess.TimeoutExpired):
-            checks["识别设备检查"] = False
-    try:
-        import sounddevice as sd
-        sd.check_input_settings(device=config.get("device"), channels=1, samplerate=16000)
-        checks["麦克风格式（未开始录音）"] = True
-    except Exception:
-        checks["麦克风格式（未开始录音）"] = False
-    for label, ok in checks.items():
-        console.print(f"{'✓' if ok else '✗'} {label}", markup=False)
-    return 0 if all(checks.values()) else 1
+    from .checks import run_checks
+    results = run_checks(config)
+    for item in results:
+        console.print(f"{'✓' if item.level == 'ok' else '✗'} {item.label}"
+                      + (f"：{item.detail}" if item.detail else ""), markup=False)
+        if item.hint:
+            console.print(f"  建议：{item.hint}", markup=False)
+    return 1 if any(item.level == "fail" for item in results) else 0
 
 
 def main(argv=None):
@@ -625,7 +590,7 @@ def main(argv=None):
         else:
             run = demo_capture
         return run(directory)
-    parser = argparse.ArgumentParser(prog="lecture", description="课堂转录与 DeepSeek 中文笔记")
+    parser = argparse.ArgumentParser(prog="lecture", description="课堂转录与中文笔记")
     parser.add_argument("--courses-dir", help="覆盖课程根目录")
     subs = parser.add_subparsers(dest="command")
     for name, help_text in [("courses", "列出课程"), ("models", "选择并保存默认语音模型"),
@@ -764,7 +729,7 @@ def main(argv=None):
                 if config["asr_model"] in QWEN_MODELS and config["language"] == "auto":
                     raise ValueError("Qwen 流式识别需要 --language en 或 zh")
             if not os.environ.get("LECTURE_NOTES_API_KEY"):
-                raise ValueError("缺少 DeepSeek key，请先运行 lecture setup 或设置 LECTURE_NOTES_API_KEY")
+                raise ValueError("缺少笔记服务 key，请先运行 lecture setup 或设置 LECTURE_NOTES_API_KEY")
             return session(args, config, select_course(root, args.course))
         return 0
     except (ValueError, OSError) as exc:

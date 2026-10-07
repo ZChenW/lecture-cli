@@ -7,6 +7,7 @@ import json
 import os
 from pathlib import Path
 
+from .providers import ASR_PRESETS, NOTES_PRESETS
 from .storage import atomic_text, write_json
 
 CONFIG_VERSION = 2
@@ -14,15 +15,15 @@ DEFAULTS = {
     "config_version": CONFIG_VERSION,
     "courses_dir": None,
     "notes_provider": "deepseek",
-    "notes_api_base": "https://api.deepseek.com",
-    "notes_model": "deepseek-flash",
-    "notes_extra_body": {"thinking": {"type": "disabled"}},
+    "notes_api_base": NOTES_PRESETS["deepseek"]["api_base"],
+    "notes_model": NOTES_PRESETS["deepseek"]["model"],
+    "notes_extra_body": NOTES_PRESETS["deepseek"]["extra_body"],
     "asr_backend": "local",
     "asr_model": "base.en",
     "asr_device": "auto",
     "asr_provider": "groq",
-    "asr_api_base": "https://api.groq.com/openai/v1",
-    "asr_api_model": "whisper-large-v3-turbo",
+    "asr_api_base": ASR_PRESETS["groq"]["api_base"],
+    "asr_api_model": ASR_PRESETS["groq"]["model"],
     "language": "en",
     "interval": 60,
     "device": None,

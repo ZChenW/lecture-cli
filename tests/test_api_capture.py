@@ -312,8 +312,9 @@ def test_api_start_and_spawn_isolate_keys_and_skip_local_imports(tmp_path, monke
     capture_command, capture_env = calls["_capture"]
     assert capture_command[0] == sys.executable
     assert capture_env["LECTURE_ASR_API_KEY"] == "fake-asr-key"
-    assert "DEEPSEEK_API_KEY" not in capture_env
+    assert "DEEPSEEK_API_KEY" not in capture_env and "LECTURE_NOTES_API_KEY" not in capture_env
     assert calls["_worker"][1]["DEEPSEEK_API_KEY"] == "fake-notes-key"
+    assert calls["_worker"][1]["LECTURE_NOTES_API_KEY"] == "fake-notes-key"
     assert "LECTURE_ASR_API_KEY" not in calls["_worker"][1]
     assert not (tmp_path / "config" / "lecture-cli" / "config.json").exists()
     assert "麦克风音量：检测到削波，麦克风音量 85% → 54%" in capsys.readouterr().out
@@ -365,13 +366,20 @@ def test_api_doctor_skips_local_probe(tmp_path, monkeypatch, capsys, fake_wpctl)
     monkeypatch.setitem(sys.modules, "sounddevice", SimpleNamespace(check_input_settings=lambda **kw: None))
     factory = httpx.Client
     def handle(request):
-        assert request.method == "GET" and request.url.path == "/openai/v1/models"
-        assert request.headers["Authorization"] == "Bearer fake-asr-key"
-        return httpx.Response(200)
+        # Each service sees only its own key.
+        assert request.method == "GET"
+        if request.url.host == "api.groq.com":
+            assert request.url.path == "/openai/v1/models"
+            assert request.headers["Authorization"] == "Bearer fake-asr-key"
+            return httpx.Response(200, json={"data": [{"id": "whisper-large-v3-turbo"}]})
+        assert request.url.host == "api.deepseek.com" and request.url.path == "/models"
+        assert request.headers["Authorization"] == "Bearer fake-notes-key"
+        return httpx.Response(200, json={"data": [{"id": "deepseek-flash"}]})
     monkeypatch.setattr(httpx, "Client", lambda **kw: factory(transport=httpx.MockTransport(handle), **kw))
     assert cli.doctor(config) == 0
     output = capsys.readouterr().out
-    assert "转录服务" in output and "转录 key" in output and "WhisperLiveKit" not in output
+    assert "✓ 转录服务" in output and "✓ 转录 key" in output and "WhisperLiveKit" not in output
+    assert "✓ 笔记服务（DeepSeek）" in output and "fake-notes-key" not in output and "fake-asr-key" not in output
     assert "✓ 默认源麦克风音量：85%" in output
     assert fake_wpctl.calls == [["wpctl", "get-volume", "@DEFAULT_AUDIO_SOURCE@"]]
 
@@ -474,6 +482,7 @@ def test_other_child_roles_never_receive_asr_key(tmp_path, monkeypatch, mode):
         # Both modes here use the local backend, whose capture child has no use for the key.
         assert "LECTURE_ASR_API_KEY" not in env
         assert ("DEEPSEEK_API_KEY" in env) == (role == "_worker")
+        assert ("LECTURE_NOTES_API_KEY" in env) == (role == "_worker")
 
 
 @pytest.mark.parametrize("argument,expected", [("--api", 1), ("", 2), ("--gpu", 3)])

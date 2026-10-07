@@ -1,6 +1,8 @@
 """Real subprocess lifecycle checks, with synthetic capture and a stub API."""
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
 import os
+import re
 import signal
 import subprocess
 import sys
@@ -30,6 +32,11 @@ def stub_runtime(tmp_path):
     (shim / "sitecustomize.py").write_text('''
 import sys, time, json, os, re
 from pathlib import Path
+if os.environ.get("LECTURE_TEST_KEYS"):
+    for role in ("_worker", "_capture"):
+        if role in sys.argv:
+            names = [n for n in ("LECTURE_NOTES_API_KEY", "DEEPSEEK_API_KEY", "LECTURE_ASR_API_KEY") if n in os.environ]
+            Path(os.environ["LECTURE_TEST_KEYS"], role).write_text(json.dumps(names))
 if "_worker" in sys.argv:
     from lecture_cli import worker
     def complete(*args):
@@ -212,3 +219,91 @@ def test_unwritable_output_preserves_tmp_until_recovery(stub_runtime, blocked):
         if proc.poll() is None:
             proc.kill()
             proc.wait()
+
+
+def test_children_receive_only_their_own_key(stub_runtime, tmp_path):
+    root, env = stub_runtime
+    keys = tmp_path / "keys"
+    keys.mkdir()
+    env.update(LECTURE_TEST_KEYS=str(keys), LECTURE_ASR_API_KEY="synthetic-asr-key")
+    proc = subprocess.Popen([sys.executable, "-m", "lecture_cli", "--courses-dir", str(root),
+                             "start", "math421", "--interval", "1"], env=env,
+                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    try:
+        wait_until(lambda: own_session(root) and (keys / "_worker").exists())
+        proc.send_signal(signal.SIGTERM)
+        proc.wait(timeout=15)
+    finally:
+        if proc.poll() is None:
+            proc.kill()
+            proc.wait()
+    # The local capture child gets no key at all; the notes child gets only notes keys.
+    assert json.loads((keys / "_capture").read_text()) == []
+    worker_keys = json.loads((keys / "_worker").read_text())
+    assert "LECTURE_NOTES_API_KEY" in worker_keys and "LECTURE_ASR_API_KEY" not in worker_keys
+
+
+class FakeNotesService(BaseHTTPRequestHandler):
+    """OpenAI-compatible chat completions on loopback, answering with valid citations."""
+    requests = []
+
+    def do_POST(self):
+        body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
+        FakeNotesService.requests.append((self.path, self.headers["Authorization"], body))
+        prompt = body["messages"][-1]["content"]
+        if body["max_tokens"] == 4000:
+            ids = [int(i) for i in re.findall(r"\[L(\d+) ", prompt.split("本批完整原文：")[1])]
+            content = json.dumps({"continues_previous": False, "topics": [
+                {"title": "特征向量", "question": "为什么必须非零？", "first": ids[0], "last": ids[-1]}]})
+        elif body["max_tokens"] == 8000:
+            first = re.search(r"\[L(\d+) ", prompt.split("本章完整原始转录：")[1])[1]
+            content = f"特征向量必须非零。[L{first}]\n<!-- REVIEW -->\n"
+        else:
+            first = re.search(r"\[L(\d+)\]", prompt.split("本批新增转录：")[1])[1]
+            content = f"- 随堂：特征向量非零 [L{first}]"
+        reply = json.dumps({"choices": [{"finish_reason": "stop", "message": {"content": content}}]}).encode()
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(reply)))
+        self.end_headers()
+        self.wfile.write(reply)
+
+    def log_message(self, *args):
+        pass
+
+
+def test_demo_uses_configured_openai_compatible_notes_service(tmp_path):
+    import threading
+    FakeNotesService.requests = []
+    server = ThreadingHTTPServer(("127.0.0.1", 0), FakeNotesService)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    root = tmp_path / "courses"
+    (root / "MATH421").mkdir(parents=True)
+    config = tmp_path / "config" / "lecture-cli"
+    config.mkdir(parents=True)
+    (config / "config.json").write_text(json.dumps({
+        "config_version": 2, "courses_dir": str(root), "notes_provider": "custom",
+        "notes_api_base": f"http://127.0.0.1:{server.server_port}/v1", "notes_model": "fake-notes",
+        "notes_extra_body": {}}))
+    # A proxy from the developer's shell must not intercept the loopback service.
+    env = {k: v for k, v in os.environ.items()
+           if k not in ("DEEPSEEK_API_KEY", "LECTURE_ASR_API_KEY") and "proxy" not in k.lower()}
+    env.update(LECTURE_NOTES_API_KEY="loopback-test-key", PYTHONPATH=str(ROOT), XDG_CONFIG_HOME=str(tmp_path / "config"))
+    try:
+        result = subprocess.run([sys.executable, "-m", "lecture_cli", "demo", "MATH421", "--interval", "1"],
+                                env=env, stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=60)
+    finally:
+        server.shutdown()
+        server.server_close()
+    assert result.returncode == 0, result.stdout + result.stderr
+    note_path = next(p for p in (root / "MATH421" / "LectureNotes").glob("*.md")
+                     if not p.stem.endswith((".transcript", ".live", ".review")))
+    note = note_path.read_text()
+    assert "已结束" in note and "详细课堂笔记" in note and "（未全部完成）" not in note
+    assert "特征向量必须非零" in note and "待整理原文" not in note
+    tokens = {body["max_tokens"] for _, _, body in FakeNotesService.requests}
+    assert tokens == {2000, 4000, 8000}
+    for path, auth, body in FakeNotesService.requests:
+        assert path == "/v1/chat/completions" and auth == "Bearer loopback-test-key"
+        assert body["model"] == "fake-notes" and "thinking" not in body
+    assert "loopback-test-key" not in result.stdout + note

@@ -24,6 +24,7 @@ def main():
     args = parser.parse_args()
     model = resolve_asr_model(args.asr_model)
     env = capture_environment(model)
+    env.pop("LECTURE_NOTES_API_KEY", None)
     env.pop("DEEPSEEK_API_KEY", None)
     env.update(HF_HUB_OFFLINE="1", OMP_NUM_THREADS="4")
     with tempfile.TemporaryDirectory(prefix="lecture-asr-bench-", dir="/tmp") as tmp:

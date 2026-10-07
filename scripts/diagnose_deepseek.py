@@ -30,11 +30,11 @@ def main():
     parser.add_argument('--mode', choices=('all', 'models', 'nonstream', 'stream'), default='all')
     args = parser.parse_args()
     config = configuration()
-    key = os.environ.get('DEEPSEEK_API_KEY', '')
+    key = os.environ.get('LECTURE_NOTES_API_KEY', '')
     if args.worker_pid:
         raw = Path(f'/proc/{args.worker_pid}/environ').read_bytes()
         worker_env = dict(entry.split(b'=', 1) for entry in raw.split(b'\0') if b'=' in entry)
-        active_key = worker_env.get(b'DEEPSEEK_API_KEY', b'').decode()
+        active_key = worker_env.get(b'LECTURE_NOTES_API_KEY', b'').decode()
         emit(active_key_matches_config=active_key == key)
         key = active_key or key
         for name in ('HTTP_PROXY', 'HTTPS_PROXY', 'ALL_PROXY', 'http_proxy', 'https_proxy', 'all_proxy', 'NO_PROXY', 'no_proxy'):
