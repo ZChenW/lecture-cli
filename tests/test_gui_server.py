@@ -376,7 +376,9 @@ def test_demo_session_through_the_api(controller_env, serve, isolated_run_regist
     note = Path(finished["output"])
     assert "These are the final words." in note.with_suffix(".transcript.md").read_text()
     assert "已结束" in note.read_text()
-    assert list(isolated_run_registry.glob("*-controller.log"))
+    # The failed end page (M6) reads the tail of this log.
+    logs = list(isolated_run_registry.glob("*-controller.log"))
+    assert [finished["log"]] == [str(path) for path in logs] and "笔记将保存到" in logs[0].read_text()
 
 
 def test_backend_reattaches_a_session_started_from_the_command_line(controller_env, serve, isolated_run_registry):
@@ -398,7 +400,8 @@ def test_backend_reattaches_a_session_started_from_the_command_line(controller_e
         if process.poll() is None:
             process.kill()
             process.wait()
-    assert json.loads(runs.record_path(record["run_id"]).read_text())["status"] == "done"
+    final = json.loads(runs.record_path(record["run_id"]).read_text())
+    assert final["status"] == "done" and final["log"] is None  # Output went to a pipe, not a file.
 
 
 def test_failed_start_returns_the_controller_log(home, serve, monkeypatch):

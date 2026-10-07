@@ -8,6 +8,7 @@ from datetime import datetime
 import json
 import os
 from pathlib import Path
+import stat
 
 from .storage import write_json
 
@@ -41,13 +42,24 @@ def prune(keep: int = KEEP) -> None:
             path.unlink(missing_ok=True)
 
 
+def output_log() -> str | None:
+    """The file this controller writes its output to (the GUI's controller log), if any."""
+    try:
+        if not stat.S_ISREG(os.fstat(1).st_mode):
+            return None  # A terminal or pipe: nothing to show later.
+        path = os.readlink("/proc/self/fd/1")
+    except OSError:
+        return None
+    return path if path.startswith("/") and not path.endswith(" (deleted)") else None
+
+
 def begin(meta: dict, directory: Path) -> str:
     identifier = run_id(meta["output"])
     runs_dir().mkdir(parents=True, exist_ok=True, mode=0o700)
     write_json(record_path(identifier), {
         "run_id": identifier, "course": meta["course"], "output": meta["output"],
         "started": meta["started"], "controller_pid": meta["controller_pid"],
-        "directory": str(directory), "status": "running"})
+        "directory": str(directory), "log": output_log(), "status": "running"})
     prune()
     return identifier
 

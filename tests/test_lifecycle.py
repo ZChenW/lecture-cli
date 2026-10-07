@@ -363,6 +363,18 @@ def test_headless_demo_without_terminal_records_phases_and_run(stub_runtime, tmp
     assert "eigenvector" not in text.lower() and "synthetic-test-key" not in text
 
 
+
+def test_command_line_run_records_its_log_file(stub_runtime, tmp_path, isolated_run_registry):
+    root, env = stub_runtime
+    log = tmp_path / "controller.log"
+    with log.open("a") as f:
+        result = subprocess.run([sys.executable, "-m", "lecture_cli", "--courses-dir", str(root),
+                                 "demo", "math421", "--headless", "--interval", "1"], env=env,
+                                stdin=subprocess.DEVNULL, stdout=f, stderr=subprocess.STDOUT, timeout=30)
+    assert result.returncode == 0, log.read_text()
+    record = only_record(isolated_run_registry)
+    assert record["status"] == "done" and record["log"] == str(log) and "已保存" in log.read_text()
+
 def test_headless_start_follows_pause_and_stop_sentinels(stub_runtime, isolated_run_registry):
     root, env = stub_runtime
     proc = subprocess.Popen([sys.executable, "-m", "lecture_cli", "--courses-dir", str(root),

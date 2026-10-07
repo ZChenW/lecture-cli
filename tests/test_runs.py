@@ -1,4 +1,6 @@
 import json
+import subprocess
+import sys
 
 import pytest
 
@@ -17,7 +19,7 @@ def test_begin_writes_only_the_registry_fields(isolated_run_registry, tmp_path):
     assert identifier == "2026-10-07_143000-课堂笔记-a1b2c3"
     assert record == {"run_id": identifier, "course": "课程", "output": "/notes/2026-10-07_143000-课堂笔记-a1b2c3.md",
                       "started": "2026-10-07T14:30:00-04:00", "controller_pid": 123,
-                      "directory": str(tmp_path / "work"), "status": "running"}
+                      "directory": str(tmp_path / "work"), "log": None, "status": "running"}
 
 
 def test_registry_keeps_only_the_newest_records(isolated_run_registry, tmp_path):
@@ -61,3 +63,13 @@ def test_prune_also_limits_controller_logs(isolated_run_registry):
     runs.prune()
     logs = sorted(path.name for path in isolated_run_registry.glob("*-controller.log"))
     assert len(logs) == runs.KEEP and logs[0] == "2026-10-07_000003-controller.log"
+
+
+
+def test_output_log_is_the_file_stdout_is_redirected_to(tmp_path):
+    probe = [sys.executable, "-c", "from lecture_cli import runs; import sys; sys.stderr.write(str(runs.output_log()))"]
+    log = tmp_path / "2026-10-07_143000-controller.log"
+    with log.open("a") as f:
+        redirected = subprocess.run(probe, stdout=f, stderr=subprocess.PIPE, text=True, check=True)
+    piped = subprocess.run(probe, capture_output=True, text=True, check=True)
+    assert redirected.stderr == str(log) and piped.stderr == "None"
