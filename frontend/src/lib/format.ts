@@ -10,16 +10,16 @@ export function formatElapsed(seconds: number): string {
   return hours ? `${hours}:${pad(minutes)}:${pad(total % 60)}` : `${pad(minutes)}:${pad(total % 60)}`;
 }
 
-/** "2026-10-07T14:30:00" (from a note file name) → "2026 年 10 月 7 日 14:30". */
-export function formatNoteTime(started: string | null): string {
-  const match = started?.match(/^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})/);
-  if (!match) return "时间未知";
-  return `${match[1]} 年 ${Number(match[2])} 月 ${Number(match[3])} 日 ${match[4]}:${match[5]}`;
-}
-
+/** "2026-10-07T14:30:00" → "2026年10月7日": one Chinese date style for the course list and the notes list. */
 export function formatNoteDate(started: string | null): string {
   const match = started?.match(/^(\d{4})-(\d{2})-(\d{2})/);
-  return match ? `${match[1]}-${match[2]}-${match[3]}` : "暂无笔记";
+  return match ? `${match[1]}年${Number(match[2])}月${Number(match[3])}日` : "暂无笔记";
+}
+
+/** The same date followed by the time: "2026年10月7日 14:30". */
+export function formatNoteTime(started: string | null): string {
+  const match = started?.match(/^\d{4}-\d{2}-\d{2}T(\d{2}):(\d{2})/);
+  return match ? `${formatNoteDate(started)} ${match[1]}:${match[2]}` : "时间未知";
 }
 
 /** One banner list: the error first, then notices, without repeating the same text. */

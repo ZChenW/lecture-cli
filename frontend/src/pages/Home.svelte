@@ -55,7 +55,6 @@
 </script>
 
 <TopBar>
-  <button type="button" class="btn primary" disabled={!selected} onclick={() => (starting = true)}>开始上课</button>
   <button type="button" class="btn icon-btn" aria-label="设置" title="设置" onclick={() => navigate("settings")}>
     <Icon name="settings" />
   </button>
@@ -63,7 +62,7 @@
 
 <div class="cols">
   <nav class="courses" aria-label="课程">
-    <p class="label mono">课程</p>
+    <p class="label">课程</p>
     {#if error}<p class="error-text" role="alert">{error}</p>{/if}
     {#if courses?.length === 0}<p class="hint">还没有课程，先新建一门。</p>{/if}
     <ul>
@@ -72,7 +71,7 @@
           <button type="button" class="course" class:current={course.name === selected?.name}
             aria-current={course.name === selected?.name ? "true" : undefined} onclick={() => (app.course = course.name)}>
             <span class="name">{course.name}</span>
-            <span class="meta mono">{formatNoteDate(course.last_note)}</span>
+            <span class="meta">{formatNoteDate(course.last_note)}</span>
           </button>
         </li>
       {/each}
@@ -97,19 +96,23 @@
 
   <main class="notes">
     {#if selected}
-      <h1>{selected.name}</h1>
-      <p class="meta mono">{selected.notes_count} 份笔记</p>
+      <div class="title-row">
+        <h1>{selected.name}</h1>
+        <button type="button" class="btn primary large" onclick={() => (starting = true)}>开始上课</button>
+      </div>
+      <p class="meta count">{selected.notes_count}份笔记</p>
       {#if notesError}<p class="error-text" role="alert">{notesError}</p>{/if}
       {#if notes?.length === 0}
-        <p class="empty">这门课还没有笔记。点右上角“开始上课”录下第一节。</p>
+        <p class="empty">这门课还没有笔记。点“开始上课”录下第一节。</p>
       {/if}
       <ul>
         {#each notes ?? [] as note (note.name)}
           <li>
             <a href={routeHash("notes", selected.name, note.name)}>
-              <span class="time mono">{formatNoteTime(note.started)}</span>
+              <span class="time">{formatNoteTime(note.started)}</span>
               <span class="kind">{note.kind ?? note.name}</span>
-              {#if note.attachments.review}<span class="tag mono">待核对</span>{/if}
+              {#if note.attachments.review}<span class="review"><span class="review-dot" aria-hidden="true"></span>待核对</span>{/if}
+              <span class="arrow"><Icon name="next" size={18} /></span>
             </a>
           </li>
         {/each}
@@ -127,10 +130,12 @@
   .courses { flex: 0 0 260px; display: flex; flex-direction: column; gap: 12px; }
   .notes { flex: 1; min-width: 0; max-width: 44em; }
   ul { list-style: none; margin: 0; padding: 0; }
+  .meta { font-size: 13px; color: var(--muted); font-variant-numeric: tabular-nums; }
   .course {
+    position: relative;
     width: 100%;
     min-height: 56px;
-    padding: 8px 0;
+    padding: 8px 0 8px 16px;
     border: none;
     border-bottom: 1px solid var(--line);
     background: none;
@@ -141,28 +146,44 @@
     color: var(--text);
   }
   .course .name { font-family: var(--display); font-size: 18px; }
+  .course:hover .name { color: var(--fg); }
+  /* 方案 B allows the accent on the current item: a bar marks the selected course. */
+  .course.current::before {
+    content: "";
+    position: absolute;
+    left: 0;
+    top: 10px;
+    bottom: 10px;
+    width: 3px;
+    background: var(--accent);
+  }
   .course.current .name { color: var(--fg); font-weight: 600; }
-  .meta { font-size: 12px; color: var(--faint); }
   .add-btn { display: inline-flex; align-items: center; gap: 6px; align-self: flex-start; }
   .add { padding-top: 8px; }
-  h1 { font-family: var(--display); font-weight: 600; font-size: 48px; line-height: 1.1; color: var(--fg); }
-  .notes > .meta { margin: 8px 0 32px; }
+  .title-row { display: flex; align-items: center; justify-content: space-between; gap: 24px; flex-wrap: wrap; }
+  h1 { font-family: var(--display); font-weight: 600; font-size: 48px; line-height: 1.1; color: var(--fg); overflow-wrap: anywhere; }
+  .count { margin: 8px 0 32px; }
   .empty { color: var(--muted); font-family: var(--display); font-size: 17px; }
+  .notes ul { margin: 0 -12px; }
   .notes li a {
     display: flex;
-    align-items: baseline;
+    align-items: center;
     gap: 20px;
     min-height: 56px;
-    padding: 16px 0;
+    padding: 14px 12px;
     border-top: 1px solid var(--line);
     text-decoration: none;
     color: var(--text);
   }
   .notes li:last-child a { border-bottom: 1px solid var(--line); }
-  .time { font-size: 13px; color: var(--muted); flex: 0 0 auto; }
+  .notes li a:hover { background: #f3f3f1; }
+  .time { font-size: 13px; color: var(--muted); flex: 0 0 auto; font-variant-numeric: tabular-nums; }
   .kind { font-family: var(--display); font-size: 17px; flex: 1; }
-  .notes li a:hover .kind { color: var(--accent); }
-  .tag { font-size: 12px; color: var(--warn); border: 1px solid currentColor; border-radius: 2px; padding: 0 6px; }
+  .notes li a:hover .kind { color: var(--fg); }
+  .review { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; color: var(--warn); }
+  .review-dot { width: 7px; height: 7px; border-radius: 50%; background: currentColor; }
+  .arrow { display: inline-flex; color: var(--faint); transition: transform 120ms ease; }
+  .notes li a:hover .arrow { color: var(--accent); transform: translateX(3px); }
   @media (max-width: 900px) {
     .cols { flex-direction: column; gap: 32px; padding: 24px 20px; }
     .courses { flex: none; }

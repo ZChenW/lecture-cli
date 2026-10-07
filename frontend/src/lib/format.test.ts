@@ -22,9 +22,10 @@ describe("snapshot view mapping", () => {
   });
 
   it("formats note times from file names", () => {
-    expect(formatNoteTime("2026-10-07T09:05:00")).toBe("2026 年 10 月 7 日 09:05");
+    expect(formatNoteTime("2026-10-07T09:05:00")).toBe("2026年10月7日 09:05");
     expect(formatNoteTime(null)).toBe("时间未知");
-    expect(formatNoteDate("2026-10-07T09:05:00")).toBe("2026-10-07");
+    expect(formatNoteDate("2026-10-07T09:05:00")).toBe("2026年10月7日");
+    expect(formatNoteDate(null)).toBe("暂无笔记");
   });
 
   it("names controller phases and summarises the transcription setup", () => {

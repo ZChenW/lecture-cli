@@ -2,6 +2,7 @@
   import { api } from "../lib/api";
   import { app, message } from "../lib/state.svelte";
   import type { Result } from "../lib/types";
+  import Choices from "./Choices.svelte";
   import KeyField from "./KeyField.svelte";
   import ServiceTest from "./ServiceTest.svelte";
 
@@ -48,12 +49,11 @@
 </script>
 
 <div class="stack">
-  <label class="field">
+  <div class="field">
     <span>服务</span>
-    <select class="input" bind:value={provider} onchange={choosePreset}>
-      {#each Object.entries(presets) as [id, preset]}<option value={id}>{preset.label}</option>{/each}
-    </select>
-  </label>
+    <Choices name="notes-preset" label="笔记服务" compact bind:value={provider} onchange={choosePreset}
+      options={Object.entries(presets).map(([id, preset]) => ({ value: id, title: preset.label }))} />
+  </div>
   <label class="field">
     <span>服务地址</span>
     <input class="input mono" bind:value={apiBase} placeholder="https://…/v1" spellcheck="false" />

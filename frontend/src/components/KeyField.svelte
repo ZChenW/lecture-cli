@@ -32,7 +32,7 @@
 </script>
 
 <div class="field">
-  <span>API key</span>
+  <span class="latin">API key</span>
   {#if status.source === "env"}
     <input class="input" type="password" disabled value="••••••••" aria-label="API key" />
     <p class="hint">来自环境变量，无法在此修改（末尾 {status.tail}）。</p>

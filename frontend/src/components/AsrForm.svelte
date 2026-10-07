@@ -2,6 +2,7 @@
   import { api } from "../lib/api";
   import { app, message } from "../lib/state.svelte";
   import type { AsrModel, Result } from "../lib/types";
+  import Choices from "./Choices.svelte";
   import KeyField from "./KeyField.svelte";
   import ModelDownload from "./ModelDownload.svelte";
   import ServiceTest from "./ServiceTest.svelte";
@@ -79,17 +80,11 @@
 </script>
 
 <div class="stack">
-  <div class="cards" role="radiogroup" aria-label="转录方式">
-    {#each [["whisper", "本地 Whisper", "在本机转录，音频不离开电脑；有 NVIDIA GPU 时更快。"],
-            ["qwen", "本地 Qwen", "本机 Qwen3-ASR，需要单独安装的 Qwen 运行环境。"],
-            ["api", "云端 API", "把音频发送到 OpenAI 兼容的转录服务，需要 key。"]] as [value, title, text]}
-      <label class="card" class:selected={mode === value}>
-        <input type="radio" name="asr-mode" {value} bind:group={mode} onchange={() => (touched = true)} />
-        <strong>{title}</strong>
-        <span class="hint">{text}</span>
-      </label>
-    {/each}
-  </div>
+  <Choices name="asr-mode" label="转录方式" bind:value={mode} onchange={() => (touched = true)} options={[
+    { value: "whisper", title: "本地 Whisper", text: "在本机转录，音频不离开电脑；有 NVIDIA GPU 时更快。" },
+    { value: "qwen", title: "本地 Qwen", text: "本机 Qwen3-ASR，需要单独安装的 Qwen 运行环境。" },
+    { value: "api", title: "云端 API", text: "把音频发送到 OpenAI 兼容的转录服务，需要 key。" },
+  ]} />
   {#if suggestion && !touched}<p class="hint">{suggestion}</p>{/if}
 
   {#if mode === "whisper"}
@@ -120,12 +115,11 @@
       <ModelDownload name={selected.name} cached={selected.cached} ondone={loadModels} />
     {/if}
   {:else}
-    <label class="field">
+    <div class="field">
       <span>服务</span>
-      <select class="input" bind:value={provider} onchange={choosePreset}>
-        {#each Object.entries(presets) as [id, preset]}<option value={id}>{preset.label}</option>{/each}
-      </select>
-    </label>
+      <Choices name="asr-preset" label="转录服务" compact bind:value={provider} onchange={choosePreset}
+        options={Object.entries(presets).map(([id, preset]) => ({ value: id, title: preset.label }))} />
+    </div>
     <label class="field">
       <span>服务地址</span>
       <input class="input mono" bind:value={apiBase} placeholder="https://…/v1" spellcheck="false" />
@@ -165,20 +159,5 @@
 </div>
 
 <style>
-  .cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 12px; }
-  .card {
-    display: flex;
-    flex-direction: column;
-    gap: 6px;
-    min-height: 44px;
-    padding: 18px 20px;
-    border: 1px solid var(--card-line);
-    border-radius: 16px;
-    background: var(--card);
-    cursor: pointer;
-  }
-  .card.selected { border-color: var(--fg); }
-  .card input { position: absolute; opacity: 0; pointer-events: none; }
-  .card:has(input:focus-visible) { outline: 2px solid var(--accent); outline-offset: 2px; }
   .row .field { flex: 1 1 200px; }
 </style>
