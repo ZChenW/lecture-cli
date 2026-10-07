@@ -142,7 +142,7 @@ def test_sigkill_ends_children_and_next_launch_recovers_stale_session(stub_runti
         def stopped(pid):
             try:
                 return Path(f"/proc/{pid}/stat").read_text().split()[2] == "Z"
-            except FileNotFoundError:
+            except OSError:  # Gone, or exiting while being read (ESRCH).
                 return True
         wait_until(lambda: all(stopped(pid) for pid in meta["children"]))
         result = subprocess.run([sys.executable, "-m", "lecture_cli", "--courses-dir", str(root), "courses"],
