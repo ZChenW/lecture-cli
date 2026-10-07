@@ -29,6 +29,10 @@ from . import library
 from .sessions import Busy, Sessions, StartError
 
 COOKIE = "lecture_session"
+# Everything the frontend needs comes from this origin: bundled scripts, styles and fonts,
+# fetch/SSE to the API. No inline code, no data: URLs, no framing, no native form posts.
+CSP = ("default-src 'none'; script-src 'self'; style-src 'self'; font-src 'self'; img-src 'self'; "
+       "connect-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'")
 STATIC = Path(__file__).parent / "static"
 KINDS = ("notes", "asr")
 SSE_INTERVAL = 0.25
@@ -68,6 +72,17 @@ class Guard:
     async def __call__(self, scope, receive, send):
         if scope["type"] != "http":
             return await self.app(scope, receive, send)
+
+        async def send_with_policy(message):
+            # Every response, including this guard's own errors and redirects.
+            if message["type"] == "http.response.start":
+                message = {**message, "headers": [*message.get("headers", []),
+                                                  (b"content-security-policy", CSP.encode())]}
+            await send(message)
+
+        await self.check(scope, receive, send_with_policy)
+
+    async def check(self, scope, receive, send):
         request = Request(scope)
         host = request.headers.get("host", "")
         if host not in self.hosts:

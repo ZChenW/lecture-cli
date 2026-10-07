@@ -156,6 +156,25 @@ def test_host_token_cookie_and_origin_checks(home, serve):
     assert app.client.get("/api/nothing").json()["error"]["code"] == "not_found"
 
 
+
+def test_every_response_carries_the_content_security_policy(home, serve):
+    app = serve()
+    responses = [app.client.get("/api/bootstrap"),  # 401
+                 app.client.get("/", headers={"Host": "evil.example"}),  # 400
+                 app.client.post("/api/quit", headers={"Origin": "http://evil.example"}),  # 403
+                 app.login(),  # 302
+                 app.client.get("/"),  # static HTML
+                 app.client.get("/api/bootstrap"),  # JSON
+                 app.client.get("/api/nothing"),  # 404 JSON
+                 app.client.get("/missing.js")]  # static 404
+    assert [r.status_code for r in responses] == [401, 400, 403, 302, 200, 200, 404, 404]
+    for response in responses:
+        policy = response.headers["content-security-policy"]
+        assert policy == gui_server.CSP and "unsafe" not in policy
+    directives = dict(part.strip().split(" ", 1) for part in gui_server.CSP.split(";"))
+    assert directives["default-src"] == "'none'" and directives["script-src"] == "'self'"
+    assert directives["frame-ancestors"] == "'none'"
+
 def test_bootstrap_on_empty_configuration(home, serve):
     app = serve()
     app.login()
