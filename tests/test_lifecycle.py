@@ -39,10 +39,12 @@ if os.environ.get("LECTURE_TEST_PHASES") and not {"_worker", "_capture", "_demo"
     from lecture_cli import storage
     original_write_json = storage.write_json
     def write_json(path, value):
-        original_write_json(path, value)
         if path.name == "controller-state.json":
             with open(os.environ["LECTURE_TEST_PHASES"], "a") as log:
                 log.write(json.dumps(value) + "\\n")
+            if os.environ.get("LECTURE_TEST_STATE_FAIL"):
+                raise OSError(28, "No space left on device")
+        original_write_json(path, value)
     storage.write_json = write_json
 if os.environ.get("LECTURE_TEST_KEYS"):
     for role in ("_worker", "_capture"):
@@ -390,6 +392,38 @@ def test_headless_start_follows_pause_and_stop_sentinels(stub_runtime, isolated_
             proc.kill()
             proc.wait()
 
+
+
+def test_controller_state_write_failures_never_block_draining(stub_runtime, tmp_path, isolated_run_registry):
+    root, env = stub_runtime
+    attempts = tmp_path / "phases.jsonl"
+    # Every controller-state.json write fails, as on a full /tmp; everything else still works.
+    env.update(LECTURE_TEST_PHASES=str(attempts), LECTURE_TEST_STATE_FAIL="1")
+    proc = subprocess.Popen([sys.executable, "-m", "lecture_cli", "--courses-dir", str(root),
+                             "start", "math421", "--headless", "--interval", "1"], env=env,
+                            stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+    try:
+        directory = wait_until(lambda: own_session(root))
+        wait_until(lambda: '"recording"' in attempts.read_text())
+        assert not (directory / "controller-state.json").exists()
+        (directory / "stop").touch()
+        output = proc.communicate(timeout=15)[0]
+        assert proc.returncode == 0, output
+        assert not directory.exists()
+    finally:
+        if proc.poll() is None:
+            proc.kill()
+            proc.wait()
+    phases = [json.loads(line)["phase"] for line in attempts.read_text().splitlines()]
+    assert [p for i, p in enumerate(phases) if i == 0 or p != phases[i - 1]] == \
+        ["starting", "recording", "draining", "finalizing", "saving"]
+    record = only_record(isolated_run_registry)
+    assert record["status"] == "done" and record["exit_code"] == 0 and record["workspace_kept"] is None
+    assert [stage["name"] for stage in record["stages"]] == ["录制与转录", "课后笔记"]
+    note = Path(record["output"])
+    # The final words arrive only while draining, after stop.
+    assert "These are the final words." in note.with_suffix(".transcript.md").read_text()
+    assert "已结束" in note.read_text() and "L1–L2" in note.read_text()
 
 def test_headless_requires_course_name(stub_runtime):
     root, env = stub_runtime

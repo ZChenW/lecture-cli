@@ -114,9 +114,9 @@ def test_non_silent_empty_result_is_failure(tmp_path):
     assert "24 AC" in final_events(tmp_path)[0]["text"]
 
 
-@pytest.mark.parametrize("mode", ["success", "failure", "cancel", "skip"])
+@pytest.mark.parametrize("mode", ["success", "failure", "cancel", "skip", "unobserved"])
 def test_real_controller_waits_for_refine_and_cleans_audio(tmp_path, mode, isolated_run_registry):
-    fail = mode != "success"
+    fail = mode in ("failure", "cancel", "skip")
     root = Path(__file__).resolve().parents[1]
     shim = tmp_path / "shim"
     shim.mkdir()
@@ -125,6 +125,15 @@ import sys, json, os
 from pathlib import Path
 from lecture_cli import cli
 cli.capture_python = lambda model, *args: sys.executable
+if os.environ.get("REFINE_TEST_NO_STATE") and not {"_worker", "_capture", "_refine"} & set(sys.argv):
+    original_write_json = cli.write_json
+    def write_json(path, value):
+        if path.name == "controller-state.json":
+            with open(os.environ["REFINE_TEST_NO_STATE"], "a") as log:
+                log.write(value["phase"] + "\\n")
+            raise OSError(28, "No space left on device")
+        original_write_json(path, value)
+    cli.write_json = write_json
 if "_capture" in sys.argv:
     from lecture_cli import capture
     from lecture_cli.storage import write_json
@@ -174,6 +183,9 @@ if "_worker" in sys.argv:
     if fail:
         env["REFINE_TEST_FAIL"] = "1"
     marker = tmp_path / "refine.started"
+    attempts = tmp_path / "phases.txt"
+    if mode == "unobserved":
+        env["REFINE_TEST_NO_STATE"] = str(attempts)
     if mode in ("cancel", "skip"):
         env["REFINE_TEST_CANCEL"] = str(marker)
     process = subprocess.Popen([sys.executable, "-m", "lecture_cli", "--courses-dir", str(courses),
@@ -213,5 +225,9 @@ if "_worker" in sys.argv:
     assert record["status"] == "done" and record["flags"]["refinement_failed"] is fail
     assert [stage["name"] for stage in record["stages"]] == ["录制与转录", "离线校正", "课后笔记"]
     assert (refinement.WARNING in record["warnings"]) is fail
+    if mode == "unobserved":
+        # Every phase, including the refinement wait, tried to publish and failed harmlessly.
+        assert {"starting", "recording", "draining", "refining", "finalizing", "saving"} <= \
+            set(attempts.read_text().split())
     for directory in Path("/tmp").glob(f"lecture-{os.getuid()}-*"):
         assert str(courses) not in str(read_json(directory / "session.json"))

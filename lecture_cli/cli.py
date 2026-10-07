@@ -283,9 +283,13 @@ def session(args, config: dict, course: Path) -> int:
         if phase:
             controller.update(phase=phase, since=time.time(), can_skip=phase == "refining")
         controller["paused"] = paused
-        write_json(directory / "controller-state.json", dict(controller, stages=[
-            {"name": name, "start": begin + wall_offset, "end": None if end is None else end + wall_offset}
-            for (name, begin), (_, end) in zip(stages, stages[1:] + [(None, None)]) if name]))
+        try:
+            write_json(directory / "controller-state.json", dict(controller, stages=[
+                {"name": name, "start": begin + wall_offset, "end": None if end is None else end + wall_offset}
+                for (name, begin), (_, end) in zip(stages, stages[1:] + [(None, None)]) if name]))
+        except OSError:
+            # Only observers read this file: a full /tmp must never cost the drain or the save.
+            controller["paused"] = None  # Retry on the next tick, in case space frees up.
 
     def finish_run(identifier, kept):
         from .refinement import WARNING
@@ -457,10 +461,7 @@ def session(args, config: dict, course: Path) -> int:
                     process.wait()
         try:
             if (directory / "session.json").exists():
-                try:
-                    publish("saving")
-                except OSError:
-                    pass  # Saving the notes matters more than announcing it.
+                publish("saving")
                 preserve_tail(directory)
                 journal = Journal(directory)
                 try:
