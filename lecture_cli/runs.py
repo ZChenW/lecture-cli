@@ -35,9 +35,10 @@ def now() -> str:
 
 
 def prune(keep: int = KEEP) -> None:
-    # Identifiers start with the local start time, so name order is age order.
-    for path in sorted(runs_dir().glob("*.json"))[:-keep]:
-        path.unlink(missing_ok=True)
+    # Names start with the local start time, so name order is age order.
+    for pattern in ("*.json", "*-controller.log"):
+        for path in sorted(runs_dir().glob(pattern))[:-keep]:
+            path.unlink(missing_ok=True)
 
 
 def begin(meta: dict, directory: Path) -> str:

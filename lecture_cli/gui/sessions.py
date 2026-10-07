@@ -1,0 +1,311 @@
+"""Start, discover and re-attach headless controllers, and build the snapshot the GUI shows."""
+from __future__ import annotations
+
+from collections import deque
+from datetime import datetime
+import json
+import os
+from pathlib import Path
+import sqlite3
+import subprocess
+import sys
+import threading
+import time
+from urllib.parse import quote
+
+from .. import runs
+from ..asr import QWEN_MODELS
+
+START_TIMEOUT = 15
+TAIL_SEGMENTS = 8
+LOG_TAIL_LINES = 20
+
+
+def alive(pid) -> bool:
+    """A zombie has exited even though its pid still answers signals."""
+    try:
+        stat = Path(f"/proc/{int(pid)}/stat").read_text()
+    except (OSError, ValueError, TypeError):
+        return False
+    return stat.rsplit(")", 1)[-1].split()[:1] not in (["Z"], ["X"])
+
+
+def workspace(value) -> Path | None:
+    """Only our own /tmp session directories may receive sentinel files."""
+    if not isinstance(value, str):
+        return None
+    path = Path(value)
+    if (path.parent != Path("/tmp") or not path.name.startswith(f"lecture-{os.getuid()}-")
+            or path.is_symlink() or not path.is_dir()):
+        return None
+    return path
+
+
+def read_state(path: Path) -> dict:
+    # Snapshots must survive any file the GUI cannot parse; read_json only covers the usual cases.
+    try:
+        value = json.loads(path.read_text())
+    except (OSError, ValueError):
+        return {}
+    return value if isinstance(value, dict) else {}
+
+
+def number(value, default=0.0) -> float:
+    return value if isinstance(value, (int, float)) and not isinstance(value, bool) else default
+
+
+class TranscriptTail:
+    """Reads transcript.jsonl incrementally; the file grows for the whole lecture."""
+
+    def __init__(self):
+        self.inode = None
+        self.offset = 0
+        self.count = 0
+        self.tail = deque(maxlen=TAIL_SEGMENTS)
+
+    def read(self, path: Path) -> None:
+        try:
+            stat = path.stat()
+            if stat.st_ino != self.inode or stat.st_size < self.offset:
+                self.__init__()
+                self.inode = stat.st_ino
+            if stat.st_size == self.offset:
+                return
+            with path.open("rb") as f:
+                f.seek(self.offset)
+                data = f.read()
+        except OSError:
+            return
+        # Like storage.events(): a line without its newline is still being written.
+        end = data.rfind(b"\n") + 1
+        for line in data[:end].splitlines():
+            try:
+                record = json.loads(line)
+            except ValueError:
+                continue
+            if isinstance(record, dict):
+                self.count += 1
+                self.tail.append({key: record.get(key) for key in ("id", "start", "end", "text")})
+        self.offset += end
+
+
+class SnapshotCache:
+    def __init__(self):
+        self.transcript = TranscriptTail()
+        self.latest = None
+
+
+def latest_batch(directory: Path, previous):
+    path = directory / "notes.sqlite"
+    if not path.exists():
+        return previous
+    try:
+        # Read-only and short timeout: never contend with the notes process for a write lock.
+        db = sqlite3.connect(f"file:{quote(str(path))}?mode=ro", uri=True, timeout=1)
+        try:
+            row = db.execute("SELECT body FROM batches ORDER BY first_id DESC LIMIT 1").fetchone()
+        finally:
+            db.close()
+    except sqlite3.Error:
+        return previous
+    return row[0] if row else previous
+
+
+def device_label(asr: dict, meta: dict):
+    # Same wording as cli.display().
+    device = asr.get("asr_device")
+    if not device:
+        return None
+    precision = "BF16" if meta.get("asr_model") in QWEN_MODELS else "FP16"
+    return "云端 API" if device == "api" else f"NVIDIA GPU · {precision}" if device == "cuda" else "CPU"
+
+
+def snapshot(directory: Path, cache: SnapshotCache | None = None) -> dict:
+    """The only session shape the frontend depends on; field meanings follow cli.display()."""
+    cache = cache or SnapshotCache()
+    meta = read_state(directory / "session.json")
+    asr = read_state(directory / "asr-state.json")
+    notes = read_state(directory / "notes-state.json")
+    refine = read_state(directory / "refinement-state.json")
+    controller = read_state(directory / "controller-state.json")
+    cache.transcript.read(directory / "transcript.jsonl")
+    cache.latest = latest_batch(directory, cache.latest)
+    children = meta.get("children") if isinstance(meta.get("children"), list) else []
+    count = int(number(asr.get("count"), cache.transcript.count))
+    enabled = bool(meta.get("refine"))
+    output = meta.get("output") if isinstance(meta.get("output"), str) else None
+    return {
+        "run_id": runs.run_id(output) if output else None,
+        "course": meta.get("course"),
+        "output": output,
+        "started": meta.get("started"),
+        "phase": controller.get("phase") or "starting",
+        "paused": (directory / "pause").exists(),
+        "can_skip": bool(controller.get("can_skip")),
+        "elapsed_seconds": int(number(asr.get("captured", asr.get("seconds")))),
+        "asr": {
+            "status": asr.get("status") or "启动中",
+            "device_label": device_label(asr, meta),
+            "model": meta.get("asr_model"),
+            "level": number(asr.get("level")),
+            "backlog_seconds": number(asr.get("lag")) + number(asr.get("queued")),
+            "queued_seconds": number(asr.get("queued")),
+            "notices": [{"kind": kind, "text": asr[field]}
+                        for kind, field in (("device", "device_notice"), ("gain", "gain_notice"), ("warning", "warning"))
+                        if asr.get(field)],
+            "error": asr.get("error") or None,
+        },
+        "transcript": {
+            "count": cache.transcript.count,
+            "tail": list(cache.transcript.tail),
+            "pending": " ".join(filter(None, [asr.get("pending"), asr.get("buffer")])),
+        },
+        "notes": {
+            "status": notes.get("status") or "等待新增转录",
+            # Unknown until the controller has recorded its children.
+            "worker_alive": alive(children[1]) if len(children) > 1 else None,
+            "unprocessed_segments": max(0, count - int(number(notes.get("cursor")))),
+            "updated": notes.get("updated"),
+            "latest": cache.latest,
+        },
+        "refine": {
+            "enabled": enabled,
+            "status": (refine.get("status") or asr.get("refinement_warning") or "Qwen 1.7B · 下课后自动重转录") if enabled else None,
+            "reason": refine.get("reason"),
+        },
+        "stages": controller.get("stages") if isinstance(controller.get("stages"), list) else [],
+    }
+
+
+class Busy(Exception):
+    """Another session is already active."""
+
+
+class StartError(Exception):
+    def __init__(self, message: str, log: str = ""):
+        super().__init__(message)
+        self.log = log
+
+
+def log_tail(path: Path, lines: int = LOG_TAIL_LINES) -> str:
+    try:
+        return "\n".join(path.read_text(errors="replace").splitlines()[-lines:])
+    except OSError:
+        return ""
+
+
+def records() -> list[dict]:
+    """Registry records, newest first; unreadable ones are skipped."""
+    result = []
+    for path in sorted(runs.runs_dir().glob("*.json"), reverse=True):
+        try:
+            record = runs.read(path.stem)
+        except OSError:
+            continue
+        if record:
+            result.append(record)
+    return result
+
+
+def command(course: str, overrides: dict, context: Path | None) -> list[str]:
+    demo = overrides.get("demo", False)
+    args = [sys.executable, "-m", "lecture_cli", "demo" if demo else "start", "--headless"]
+    if "interval" in overrides:
+        args.append(f"--interval={overrides['interval']}")
+    if context:
+        args.append(f"--context={context}")
+    if not demo:
+        # demo has no such options: it neither records nor refines.
+        if "language" in overrides:
+            args.append(f"--language={overrides['language']}")
+        if "refine" in overrides:
+            args.append("--refine" if overrides["refine"] else "--no-refine")
+        if "auto_gain" in overrides:
+            args.append("--auto-gain" if overrides["auto_gain"] else "--no-auto-gain")
+    # "--" keeps a course name such as "-x" from being read as an option.
+    return args + ["--", course]
+
+
+class Sessions:
+    def __init__(self, reap=None):
+        from ..cli import reap_stale_sessions
+        self.reap = reap or reap_stale_sessions
+        self.lock = threading.Lock()
+        self.starting = threading.Lock()
+        self.children: dict[int, subprocess.Popen] = {}
+        self.reaped: set = set()
+        self.caches: dict[Path, SnapshotCache] = {}
+
+    def active(self) -> dict | None:
+        with self.lock:
+            for pid, process in list(self.children.items()):
+                if process.poll() is not None:  # Collect exited controllers so they do not linger as zombies.
+                    del self.children[pid]
+            stale = False
+            for record in records():
+                if record.get("status") != "running":
+                    continue
+                directory, pid = workspace(record.get("directory")), record.get("controller_pid")
+                if directory and alive(pid):
+                    return {"run_id": record.get("run_id"), "directory": directory, "pid": pid}
+                if pid not in self.reaped:
+                    self.reaped.add(pid)
+                    stale = True
+            if stale:
+                # Crashed controllers: recover their notes and mark the records, as the CLI would.
+                self.reap()
+            return None
+
+    def snapshot(self, active: dict) -> dict:
+        cache = self.caches.setdefault(active["directory"], SnapshotCache())
+        return snapshot(active["directory"], cache)
+
+    def final_record(self, active: dict) -> dict | None:
+        """The finished registry record, or None while the controller still runs."""
+        try:
+            record = runs.read(active["run_id"])
+        except OSError:
+            record = {}
+        if record.get("status") not in (None, "running"):
+            return record
+        if alive(active["pid"]):
+            return None
+        # The controller writes its final record before exiting, so it crashed or lost the registry.
+        with self.lock:
+            self.reap()
+        try:
+            record = runs.read(active["run_id"]) or {}
+        except OSError:
+            record = {}
+        if record.get("status") in (None, "running"):
+            record = {**record, "run_id": active["run_id"], "status": "failed"}
+        return record
+
+    def start(self, course: str, overrides: dict, context: Path | None) -> dict:
+        # Held through the whole wait so two clicks cannot start two lectures.
+        with self.starting:
+            if self.active():
+                raise Busy()
+            self.reap()
+            return self._spawn(course, overrides, context)
+
+    def _spawn(self, course: str, overrides: dict, context: Path | None) -> dict:
+        with self.lock:
+            directory = runs.runs_dir()
+            directory.mkdir(parents=True, exist_ok=True, mode=0o700)
+            log_path = directory / f"{datetime.now():%Y-%m-%d_%H%M%S}-controller.log"
+            with log_path.open("a") as log:
+                # A new session: the controller outlives this backend and keeps its own process group.
+                process = subprocess.Popen(command(course, overrides, context), stdin=subprocess.DEVNULL,
+                                           stdout=log, stderr=subprocess.STDOUT, start_new_session=True)
+            self.children[process.pid] = process
+        deadline = time.monotonic() + START_TIMEOUT
+        while time.monotonic() < deadline:
+            for record in records():
+                if record.get("controller_pid") == process.pid and workspace(record.get("directory")):
+                    return {"run_id": record.get("run_id"), "directory": Path(record["directory"]), "pid": process.pid}
+            if process.poll() is not None:
+                raise StartError(f"控制器已退出（退出码 {process.returncode}）", log_tail(log_path))
+            time.sleep(0.1)
+        process.terminate()  # It still saves whatever it has; better than an invisible recording.
+        raise StartError(f"控制器 {START_TIMEOUT} 秒内未就绪，已请求它结束", log_tail(log_path))

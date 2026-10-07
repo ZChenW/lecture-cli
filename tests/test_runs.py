@@ -52,3 +52,12 @@ def test_unreadable_record_is_unavailable_and_left_untouched(isolated_run_regist
     with pytest.raises(runs.Unavailable):
         runs.update(identifier, status="done")
     assert runs.record_path(identifier).read_bytes() == corrupt
+
+
+def test_prune_also_limits_controller_logs(isolated_run_registry):
+    isolated_run_registry.mkdir(parents=True)
+    for index in range(runs.KEEP + 3):
+        (isolated_run_registry / f"2026-10-07_{index:06d}-controller.log").write_text("log")
+    runs.prune()
+    logs = sorted(path.name for path in isolated_run_registry.glob("*-controller.log"))
+    assert len(logs) == runs.KEEP and logs[0] == "2026-10-07_000003-controller.log"

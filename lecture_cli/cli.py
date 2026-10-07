@@ -676,7 +676,7 @@ def main(argv=None):
                             ("devices", "列出麦克风"), ("doctor", "检查环境，不录音"),
                             ("prepare", "提前下载语音模型"), ("start", "选择课程并录制"),
                             ("diagnose-asr", "录制同一段音频并对比两个语音模型"),
-                            ("demo", "用自造文字演示笔记生成，不录音")]:
+                            ("demo", "用自造文字演示笔记生成，不录音"), ("gui", "打开图形界面")]:
         sub = subs.add_parser(name, help=help_text)
         if name in ("start", "demo"):
             sub.add_argument("course", nargs="?")
@@ -700,6 +700,8 @@ def main(argv=None):
             sub.add_argument("--language", help="课堂语言，默认 en")
             sub.add_argument("--audio-file", help="使用已有音频代替麦克风")
             sub.add_argument("--fast", action="store_true", help="尽快处理已有音频")
+        if name == "gui":
+            sub.add_argument("--no-window", action="store_true", help="只启动本机界面服务并打印地址")
         if name == "diagnose-asr":
             from .asr_diagnostics import DEFAULT_MODELS
             sub.add_argument("course", nargs="?")
@@ -717,6 +719,10 @@ def main(argv=None):
     if not args.command:
         parser.print_help()
         return 0
+    if args.command == "gui":
+        # Before configuration checks: the GUI is where a broken configuration gets fixed.
+        from .gui.launch import run as gui
+        return gui(no_window=args.no_window)
     config = configuration(load_key=args.command != "diagnose-asr")
     reap_stale_sessions()
     for field in ("courses_dir", "asr_model", "asr_device", "interval", "device", "language", "refine", "auto_gain", "asr_backend", "asr_api_model"):
