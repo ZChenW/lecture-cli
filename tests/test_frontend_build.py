@@ -78,6 +78,13 @@ def test_math_uses_the_bundled_math_font_with_italic_identifiers():
     assert not re.search(r"mi[^{]*\{[^}]*text-transform:\s*none", css)
 
 
+def test_reader_inline_math_matches_the_chinese_text_height():
+    # STIX capitals at 1.25em reach the top of the CJK glyphs around them; display math keeps 22px.
+    css = "".join(path.read_text() for path in (STATIC / "assets").glob("*.css"))
+    assert re.search(r"\.prose[.\w-]* \.katex math:not\(\[display=\"?block\"?\]\)\{font-size:1\.25em\}", css)
+    assert re.search(r"\.prose[.\w-]* \.math-block\{[^}]*font-size:22px", css)
+
+
 def test_every_environment_check_has_a_gui_destination():
     # A new check in lecture_cli/checks.py must say where the GUI fixes it, or that it cannot.
     source = (ROOT / "lecture_cli" / "checks.py").read_text()

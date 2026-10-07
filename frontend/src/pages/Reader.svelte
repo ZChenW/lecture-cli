@@ -336,6 +336,9 @@
   .prose :global(a:hover) { color: #111111; text-decoration-thickness: 2px; }
   .prose :global(strong) { color: #111111; font-weight: 600; }
   .prose :global(.math-block) { padding: 16px 0; border-top: 1px solid #D9D9D6; border-bottom: 1px solid #D9D9D6; text-align: center; font-size: 22px; line-height: 1.5; color: #111111; overflow-x: auto; overflow-y: hidden; }
+  /* STIX capitals are 0.66em tall, Chinese glyphs about 0.81em above the baseline: at 1.25em an
+     inline formula stands as tall as the characters around it. Display math is already 22px. */
+  .prose :global(.katex math:not([display="block"])) { font-size: 1.25em; }
   /* A formula KaTeX rejects shows its TeX and a small mark; the rest of the page renders normally. */
   .prose :global(.math-error) { font-family: var(--mono); font-size: 14px; color: #2A2A29; white-space: pre-wrap; overflow-wrap: anywhere; }
   .prose :global(.math-block .math-error) { display: block; }
