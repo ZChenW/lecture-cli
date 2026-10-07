@@ -49,11 +49,13 @@
         {#if !["en", "zh", "auto"].includes(language)}<option value={language}>{language}</option>{/if}
       </select>
     </label>
-    <label class="check">
-      <input type="checkbox" bind:checked={refine} disabled={cloud} />
-      下课后用 Qwen 校正转录
-    </label>
-    {#if cloud}<p class="hint">使用云端转录时不进行课后校正。</p>{/if}
+    {#if !cloud}
+      <!-- Cloud transcription is never refined afterwards, so the option is not offered. -->
+      <label class="check">
+        <input type="checkbox" bind:checked={refine} />
+        下课后用 Qwen 校正转录
+      </label>
+    {/if}
     {#if error}<p class="error-text" role="alert">{error}</p>{/if}
     {#if log}<pre class="log">{log}</pre>{/if}
     <div class="row actions">

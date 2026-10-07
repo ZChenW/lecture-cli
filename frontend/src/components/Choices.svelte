@@ -40,7 +40,8 @@
   .compact .choice { justify-content: center; padding: 10px 16px; border-radius: 12px; }
   .choice:hover { border-color: var(--control-line); }
   .choice.selected { border-color: var(--select); box-shadow: inset 0 0 0 1px var(--select); }
-  .choice:has(input:focus-visible) { outline: 2px solid var(--accent); outline-offset: 2px; }
+  .choice:has(input:focus-visible) { outline: 2px solid var(--focus); outline-offset: 2px; }
+  :global(.paper) .choice:has(input:focus-visible) { outline-offset: 0; }
   .head { display: flex; align-items: center; gap: 10px; }
   .dot {
     flex: none;

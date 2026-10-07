@@ -66,3 +66,12 @@ def test_fonts_ship_with_their_licences():
     for family in ("instrument-serif", "geist", "geist-mono", "source-serif-4", "dm-mono"):
         assert list(fonts.glob(f"{family}-latin-*.woff2")), family
         assert "SIL Open Font License" in (fonts / f"{family}-OFL.txt").read_text()
+
+
+def test_every_environment_check_has_a_gui_destination():
+    # A new check in lecture_cli/checks.py must say where the GUI fixes it, or that it cannot.
+    source = (ROOT / "lecture_cli" / "checks.py").read_text()
+    ids = set(re.findall(r"""(?:\bcheck|\bCheck|\bservice)\(\s*"(\w+)\"""", source))
+    fixes = (ROOT / "frontend" / "src" / "lib" / "checks.ts").read_text()
+    table = fixes[fixes.index("{", fixes.index("FIXES")):fixes.index("};", fixes.index("FIXES"))]
+    assert ids and ids == set(re.findall(r"^\s*(\w+):", table, re.M))

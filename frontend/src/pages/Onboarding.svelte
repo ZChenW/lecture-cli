@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onDestroy } from "svelte";
   import { api, subscribe, type Subscription } from "../lib/api";
+  import type { FixTarget } from "../lib/checks";
   import { phaseLabel } from "../lib/format";
   import { navigate } from "../lib/router";
   import { app, message, refresh } from "../lib/state.svelte";
@@ -72,6 +73,18 @@
     }
   }
 
+  // The wizard has no refine step; that one opens the settings section instead.
+  const STEPS: Record<Exclude<FixTarget, "refine">, number> = { courses: 0, asr: 1, notes: 2, mic: 3 };
+  function fix(target: FixTarget) {
+    if (target === "refine") {
+      app.section = "refine";
+      navigate("settings");
+    } else {
+      step = STEPS[target];
+      ready = step === 3;
+    }
+  }
+
   function back() {
     step -= 1;
     ready = false;
@@ -130,7 +143,8 @@
           <MicForm bind:this={form} />
         {:else}
           <div class="stack">
-            <ChecksPanel bind:results={checks} bind:this={panel} />
+            <ChecksPanel bind:results={checks} bind:this={panel} onfix={fix}
+            fixText={(t) => t === "refine" ? "前往设置：课后校正" : `回到「${steps[STEPS[t]].label}」这一步`} />
             <section class="stack demo" aria-label="试运行">
               <p class="hint">试运行用一段自造的文字走一遍完整流程，不录音；会消耗少量笔记服务 API 额度。</p>
               {#if courses.length}

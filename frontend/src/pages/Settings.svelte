@@ -8,6 +8,8 @@
   import RefineForm from "../components/RefineForm.svelte";
   import SettingsSection from "../components/SettingsSection.svelte";
   import TopBar from "../components/TopBar.svelte";
+  import { onMount } from "svelte";
+  import { TARGET_LABELS, type FixTarget } from "../lib/checks";
   import { app } from "../lib/state.svelte";
 
   type Form = { save(): Promise<boolean> };
@@ -17,6 +19,16 @@
   let notes = $state<Form>();
   let mic = $state<Form>();
   const unfinished = !app.boot?.configured;
+
+  function show(target: FixTarget) {
+    const heading = document.getElementById(`s-${target}`);
+    heading?.scrollIntoView({ block: "start" });
+    heading?.focus({ preventScroll: true });
+  }
+  onMount(() => {
+    if (app.section) show(app.section as FixTarget);
+    app.section = null;
+  });
 </script>
 
 <TopBar>
@@ -45,7 +57,7 @@
   </SettingsSection>
   <SettingsSection id="s-checks" title="环境检查">
     <p class="hint">检查本地依赖、模型、麦克风和两个服务的连接；会向服务发送一次很小的测试请求。</p>
-    <ChecksPanel auto={false} />
+    <ChecksPanel auto={false} onfix={show} fixText={(t) => `前往「${TARGET_LABELS[t]}」设置`} />
   </SettingsSection>
 </main>
 

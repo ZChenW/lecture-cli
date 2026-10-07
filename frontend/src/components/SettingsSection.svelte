@@ -21,7 +21,7 @@
 </script>
 
 <section aria-labelledby={id}>
-  <h2 {id}>{title}</h2>
+  <h2 {id} tabindex="-1">{title}</h2>
   {@render children()}
   {#if onsave}
     <div class="row save">

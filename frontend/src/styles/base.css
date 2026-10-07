@@ -18,6 +18,8 @@
   --field: rgba(255, 255, 255, 0.04);
   --accent: #d4ff5c;
   --select: #d4ff5c;
+  --focus: #d4ff5c;
+  --chevron: url("./select-night.svg");
   --primary: #d4ff5c;
   --on-primary: #0b0c0e;
   --warn: #ffb454;
@@ -44,6 +46,9 @@
   --accent: #c42710;
   /* Selected choices use ink: 方案 B keeps the accent for the current course and link hovers. */
   --select: #111111;
+  /* Ink, not the accent: a red ring around a field reads as an error. */
+  --focus: #111111;
+  --chevron: url("./select-paper.svg");
   --primary: #111111;
   --on-primary: #fbfbfa;
   /* Darker than the accent so warnings never read as a third accent use (both ≥ 6:1 on --bg). */
@@ -72,7 +77,9 @@ h1, h2, h3, p { margin: 0; }
 button, input, select { font: inherit; color: inherit; }
 a { color: inherit; }
 .paper a:hover { color: var(--accent); }
-:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+/* On bordered controls the ring joins the border, so it reads as one solid line, not two. */
+.paper :is(.btn, .input):focus-visible { outline-offset: 0; }
 
 .btn {
   min-height: 44px;
@@ -123,7 +130,17 @@ a { color: inherit; }
   width: 100%;
 }
 .input:disabled { opacity: 0.6; }
-select.input { padding-right: 8px; }
+/* Native arrows differ per platform and ignore the theme; a bundled chevron matches the inputs. */
+select.input {
+  appearance: none;
+  padding-right: 40px;
+  background-image: var(--chevron);
+  background-repeat: no-repeat;
+  background-position: right 14px center;
+  background-size: 12px 12px;
+  cursor: pointer;
+}
+.night select.input option { background: #0b0c0e; color: #eceae4; }
 .hint { font-size: 13px; color: var(--muted); }
 .error-text { font-size: 13px; color: var(--error); }
 .warn-text { font-size: 13px; color: var(--warn); }
