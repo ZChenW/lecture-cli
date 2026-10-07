@@ -257,4 +257,14 @@ uv pip check --python .venv/bin/python
 
 第一版的时间戳是模型估计的音频相对时间，不含暂停时长。L 编号表示本次转录片段，最终笔记附每批的时间范围；完整转录按要求不长期保存。未提供的板书与听辨不清的公式保留“待核对”。
 
+## 开发
+
+图形界面的前端源码在 `frontend/`（Svelte 5 + Vite + TypeScript），构建产物 `lecture_cli/gui/static/` 提交在仓库中，所以安装和使用都不需要 Node。改了前端要重新构建并提交产物：
+
+```sh
+./scripts/build-frontend.sh   # 需要 Node 22.12 以上；依次 npm ci、类型检查、前端测试、构建
+```
+
+脚本把前端源码的哈希写入 `lecture_cli/gui/static/build-hash.txt`；产物与源码不一致时 `pytest` 会失败。界面后端对所有响应施加严格的内容安全策略，前端不得使用内联脚本、内联样式或任何外部资源（包括字体和 CDN）。
+
 资料：[WhisperLiveKit](https://github.com/QuentinFuxa/WhisperLiveKit)、[DeepSeek 接口](https://api-docs.deepseek.com/)。

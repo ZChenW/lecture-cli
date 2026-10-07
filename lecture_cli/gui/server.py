@@ -265,7 +265,7 @@ def create_app(port: int, token: str, *, on_quit=None, sessions: Sessions | None
     async def test_service(request):
         kind = kind_of(request)
         changes = await body_of(request, required=False)
-        for field in ("api_base", "model", "key"):
+        for field in ("api_base", "model", "key", "provider"):
             if field in changes and not isinstance(changes[field], str):
                 raise ApiError(422, "invalid_request", f"{field} 必须是字符串", field)
         config = settings.load()
@@ -278,6 +278,8 @@ def create_app(port: int, token: str, *, on_quit=None, sessions: Sessions | None
             config[f"{kind}_api_base"] = changes["api_base"]
         if "model" in changes:
             config["notes_model" if kind == "notes" else "asr_api_model"] = changes["model"]
+        if "provider" in changes:  # Only names the service in the result message.
+            config[f"{kind}_provider"] = changes["provider"]
         key = key or settings.read_key(kind)[0]
         test = test_notes if kind == "notes" else test_asr
         return JSONResponse(asdict(await run_in_threadpool(test, config, key, transport)))

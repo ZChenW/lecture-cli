@@ -5,6 +5,8 @@ Starlette's TestClient buffers a whole streamed body, so the app runs under uvic
 """
 import json
 import os
+import posixpath
+import re
 from pathlib import Path
 import socket
 import sqlite3
@@ -175,6 +177,26 @@ def test_every_response_carries_the_content_security_policy(home, serve):
     assert directives["default-src"] == "'none'" and directives["script-src"] == "'self'"
     assert directives["frame-ancestors"] == "'none'"
 
+def test_built_frontend_loads_entirely_from_the_backend(home, serve):
+    app = serve()
+    app.login()
+    page = app.client.get("/")
+    assert page.status_code == 200 and '<div id="app">' in page.text
+    assets = re.findall(r'(?:src|href)="\./([^"]+)"', page.text)
+    assert any(a.endswith(".js") for a in assets) and any(a.endswith(".css") for a in assets)
+    fonts = []
+    for asset in assets:
+        response = app.client.get("/" + asset)
+        assert response.status_code == 200 and response.headers["content-security-policy"] == gui_server.CSP
+        if asset.endswith(".css"):
+            fonts += [posixpath.normpath(posixpath.join(posixpath.dirname(asset), url))
+                      for url in re.findall(r"url\(([^)]+\.woff2)\)", response.text)]
+    assert fonts
+    for font in fonts:
+        response = app.client.get("/" + font)
+        assert response.status_code == 200 and response.content[:4] == b"wOF2"
+
+
 def test_bootstrap_on_empty_configuration(home, serve):
     app = serve()
     app.login()
@@ -268,6 +290,17 @@ def test_connection_test_never_sends_the_saved_key_to_another_host(home, serve):
     for body in ({}, {"api_base": "https://api.deepseek.com/"}, {"model": "other"}):
         assert app.post("/api/test/notes", body).status_code == 200
         assert seen.pop() == ("api.deepseek.com", f"Bearer {SECRET}")
+
+
+def test_connection_test_names_the_service_being_tested(home, serve):
+    app = serve(transport=httpx.MockTransport(lambda request: httpx.Response(200, json={"data": []})))
+    app.login()
+    save_config(home)  # The saved service is DeepSeek.
+    body = {"api_base": "https://llm.example.edu/v1", "model": "m", "key": "typed-0000"}
+    assert "DeepSeek" in app.post("/api/test/notes", body).json()["message"]
+    message = app.post("/api/test/notes", {**body, "provider": "custom"}).json()["message"]
+    assert "llm.example.edu" in message and "DeepSeek" not in message
+    assert app.post("/api/test/notes", {**body, "provider": 1}).status_code == 422
 
 def write_note(course, stem="2026-10-07_143000-课堂笔记-a1b2c3", attachments=("transcript",)):
     folder = course / "LectureNotes"

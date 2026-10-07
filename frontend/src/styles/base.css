@@ -1,0 +1,155 @@
+:root {
+  --cjk-sans: "Noto Sans CJK SC", "Source Han Sans SC", "WenQuanYi Micro Hei", sans-serif;
+  --cjk-serif: "Noto Serif CJK SC", "Source Han Serif SC", serif;
+}
+
+/* 方案 A · 夜幕: onboarding (and later recording). */
+.night {
+  color-scheme: dark;
+  --bg: #0b0c0e;
+  --fg: #eceae4;
+  --text: #eceae4;
+  --muted: #a9abb0;
+  --faint: #8e9096;
+  --line: #1d1f23;
+  --card-line: #23252a;
+  --control-line: #34363b;
+  --card: rgba(255, 255, 255, 0.025);
+  --field: rgba(255, 255, 255, 0.04);
+  --accent: #d4ff5c;
+  --primary: #d4ff5c;
+  --on-primary: #0b0c0e;
+  --warn: #ffb454;
+  --error: #ff6b5e;
+  --ok: #d4ff5c;
+  --ui: "Geist", var(--cjk-sans);
+  --mono: "Geist Mono", ui-monospace, monospace;
+  --display: "Instrument Serif", var(--cjk-serif);
+}
+
+/* 方案 B · 纸页: home, settings, reading. */
+.paper {
+  color-scheme: light;
+  --bg: #fbfbfa;
+  --fg: #111111;
+  --text: #2a2a29;
+  --muted: #5c5c5a;
+  --faint: #767674;
+  --line: #d9d9d6;
+  --card-line: #d9d9d6;
+  --control-line: #111111;
+  --card: transparent;
+  --field: #ffffff;
+  --accent: #c42710;
+  --primary: #111111;
+  --on-primary: #fbfbfa;
+  /* Darker than the accent so warnings never read as a third accent use (both ≥ 6:1 on --bg). */
+  --warn: #8a5300;
+  --error: #9b1c0c;
+  --ok: #2a5e1e;
+  --ui: "Geist", var(--cjk-sans);
+  --mono: "DM Mono", ui-monospace, monospace;
+  --display: "Source Serif 4", var(--cjk-serif);
+}
+
+*, *::before, *::after { box-sizing: border-box; }
+html, body { margin: 0; }
+body { min-width: 320px; }
+.app {
+  min-height: 100vh;
+  background: var(--bg);
+  color: var(--fg);
+  font-family: var(--ui);
+  font-size: 15px;
+  line-height: 1.6;
+}
+h1, h2, h3, p { margin: 0; }
+button, input, select { font: inherit; color: inherit; }
+a { color: inherit; }
+.paper a:hover { color: var(--accent); }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+.btn {
+  min-height: 44px;
+  padding: 0 20px;
+  border-radius: 999px;
+  border: 1px solid var(--control-line);
+  background: transparent;
+  color: var(--fg);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.btn.primary { background: var(--primary); color: var(--on-primary); border-color: var(--primary); font-weight: 600; }
+.btn.large { min-height: 56px; padding: 0 28px; }
+.btn:disabled { opacity: 0.45; cursor: not-allowed; }
+.icon-btn { width: 44px; padding: 0; }
+.link-btn {
+  min-height: 44px;
+  border: none;
+  background: none;
+  padding: 0;
+  color: var(--muted);
+  cursor: pointer;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+.field { display: flex; flex-direction: column; gap: 6px; }
+.field > span, .field > label, .label {
+  font-size: 12px;
+  letter-spacing: 0.12em;
+  color: var(--faint);
+}
+.night .field > span, .night .field > label, .night .label { letter-spacing: 0.24em; }
+.input {
+  min-height: 44px;
+  padding: 0 14px;
+  border: 1px solid var(--control-line);
+  border-radius: 10px;
+  background: var(--field);
+  width: 100%;
+}
+.input:disabled { opacity: 0.6; }
+select.input { padding-right: 8px; }
+.hint { font-size: 13px; color: var(--muted); }
+.error-text { font-size: 13px; color: var(--error); }
+.warn-text { font-size: 13px; color: var(--warn); }
+.ok-text { font-size: 13px; color: var(--ok); }
+.mono { font-family: var(--mono); }
+.row { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; }
+.stack { display: flex; flex-direction: column; gap: 16px; }
+.check {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 44px;
+  cursor: pointer;
+}
+.check input { width: 18px; height: 18px; accent-color: var(--primary); }
+pre.log {
+  margin: 0;
+  max-height: 240px;
+  overflow: auto;
+  padding: 12px 14px;
+  border: 1px solid var(--card-line);
+  border-radius: 10px;
+  font-family: var(--mono);
+  font-size: 12px;
+  white-space: pre-wrap;
+  color: var(--muted);
+}
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation: none !important; transition: none !important; scroll-behavior: auto !important; }
+}
