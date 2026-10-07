@@ -39,6 +39,7 @@ console = Console()
 NO_COURSES_DIR = "尚未设置课程目录，请运行 lecture setup 或 lecture gui"
 FALLBACK_NOTICE = "部分内容未完成笔记服务整理，已作为“待整理原文”保存在笔记中。"
 DETAIL_NOTICE = "详细笔记未全部完成；已完成章节及剩余原文已保存在笔记中。"
+REGISTRY_UNAVAILABLE = "运行登记暂不可用，已跳过更新；笔记不受影响。"
 
 
 # Thin forwards: tests, scripts and completion still import these from cli.
@@ -97,8 +98,8 @@ def reap_stale_sessions() -> None:
                 console.print(f"已恢复上次中断的笔记并清理临时文件：{meta['output']}", markup=False)
                 try:
                     runs.mark_recovered(meta)
-                except OSError:
-                    pass  # The note is already saved; the registry is only a record of it.
+                except OSError:  # Includes an unreadable record; the note is already saved.
+                    console.print(REGISTRY_UNAVAILABLE, style="yellow", markup=False)
         except BlockingIOError:
             continue  # Another lecture controller is still using this workspace.
         except OSError:
@@ -305,8 +306,8 @@ def session(args, config: dict, course: Path) -> int:
                         flags={"refinement_failed": refinement_failed, "has_fallback": has_fallback,
                                "detail_incomplete": detail_incomplete},
                         warnings=notices, workspace_kept=kept)
-        except OSError:
-            console.print("无法更新运行登记。", style="yellow", markup=False)
+        except OSError:  # Includes runs.Unavailable: a corrupt record must not change the exit code.
+            console.print(REGISTRY_UNAVAILABLE, style="yellow", markup=False)
 
     def show(stage="", worker_dead=False):
         # Headless mode never builds the terminal view.

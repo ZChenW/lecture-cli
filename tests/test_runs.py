@@ -1,5 +1,7 @@
 import json
 
+import pytest
+
 from lecture_cli import runs
 
 
@@ -36,3 +38,17 @@ def test_update_merges_and_recovery_only_touches_existing_records(isolated_run_r
     record = json.loads(runs.record_path(identifier).read_text())
     assert record["status"] == "recovered" and record["exit_code"] == 1 and record["course"] == "课程"
     assert not runs.record_path("2026-10-07_150000-课堂笔记-ffffff").exists()
+
+
+@pytest.mark.parametrize("corrupt", [b"\\xff\\xfe", b"{", b'"text"', b"[]"])
+def test_unreadable_record_is_unavailable_and_left_untouched(isolated_run_registry, tmp_path, corrupt):
+    identifier = runs.begin(meta("2026-10-07_143000-课堂笔记-a1b2c3"), tmp_path)
+    runs.record_path(identifier).write_bytes(corrupt)
+
+    with pytest.raises(runs.Unavailable) as error:
+        runs.mark_recovered(meta("2026-10-07_143000-课堂笔记-a1b2c3"))
+    # Callers already treat every OSError from the registry as "registry unavailable".
+    assert isinstance(error.value, OSError)
+    with pytest.raises(runs.Unavailable):
+        runs.update(identifier, status="done")
+    assert runs.record_path(identifier).read_bytes() == corrupt

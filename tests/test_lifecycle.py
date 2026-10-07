@@ -425,6 +425,33 @@ def test_controller_state_write_failures_never_block_draining(stub_runtime, tmp_
     assert "These are the final words." in note.with_suffix(".transcript.md").read_text()
     assert "已结束" in note.read_text() and "L1–L2" in note.read_text()
 
+
+@pytest.mark.parametrize("corrupt", [b"\\xff\\xfe\\x00not utf-8", b"{not json", b"[1, 2]"])
+def test_unreadable_registry_record_never_changes_exit_code(stub_runtime, isolated_run_registry, corrupt):
+    root, env = stub_runtime
+    proc = subprocess.Popen([sys.executable, "-m", "lecture_cli", "--courses-dir", str(root),
+                             "start", "math421", "--headless", "--interval", "1"], env=env,
+                            stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+    try:
+        directory = wait_until(lambda: own_session(root))
+        record_path = next(isolated_run_registry.glob("*.json"))
+        record_path.write_bytes(corrupt)
+        (directory / "stop").touch()
+        output = proc.communicate(timeout=15)[0]
+        assert proc.returncode == 0, output
+        assert not directory.exists()
+    finally:
+        if proc.poll() is None:
+            proc.kill()
+            proc.wait()
+    assert output.count("运行登记暂不可用") == 1 and "错误" not in output
+    # The unreadable record is left alone rather than overwritten.
+    assert record_path.read_bytes() == corrupt
+    note = next(p for p in (root / "MATH421" / "LectureNotes").glob("*.md")
+                if not p.stem.endswith((".transcript", ".live", ".review")))
+    assert "已结束" in note.read_text()
+    assert "These are the final words." in note.with_suffix(".transcript.md").read_text()
+
 def test_headless_requires_course_name(stub_runtime):
     root, env = stub_runtime
     result = subprocess.run([sys.executable, "-m", "lecture_cli", "--courses-dir", str(root), "start", "--headless"],

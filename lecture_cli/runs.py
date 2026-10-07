@@ -5,12 +5,17 @@ Records never contain transcript text or keys.
 from __future__ import annotations
 
 from datetime import datetime
+import json
 import os
 from pathlib import Path
 
-from .storage import read_json, write_json
+from .storage import write_json
 
 KEEP = 200
+
+
+class Unavailable(OSError):
+    """A record exists but cannot be read back; callers treat the registry as unavailable."""
 
 
 def runs_dir() -> Path:
@@ -46,9 +51,22 @@ def begin(meta: dict, directory: Path) -> str:
     return identifier
 
 
-def update(identifier: str, **fields) -> None:
+def read(identifier: str) -> dict:
     path = record_path(identifier)
-    write_json(path, {**read_json(path), **fields})
+    try:
+        record = json.loads(path.read_bytes().decode("utf-8"))
+    except FileNotFoundError:
+        return {}
+    except ValueError as exc:  # Invalid UTF-8 or invalid JSON.
+        raise Unavailable(f"登记记录无法读取：{path.name}") from exc
+    if not isinstance(record, dict):
+        raise Unavailable(f"登记记录格式错误：{path.name}")
+    return record
+
+
+def update(identifier: str, **fields) -> None:
+    # Never overwrite a record we cannot read: it may hold the only trace of that run.
+    write_json(record_path(identifier), {**read(identifier), **fields})
 
 
 def mark_recovered(meta: dict) -> None:
