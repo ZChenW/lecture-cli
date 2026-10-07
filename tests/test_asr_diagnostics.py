@@ -126,7 +126,7 @@ def test_cli_diagnostic_does_not_load_deepseek_credentials(tmp_path, monkeypatch
         calls.append(load_key)
         return {"courses_dir": str(tmp_path), "model": "deepseek-flash",
                 "asr_model": "base.en", "language": "en", "interval": 60,
-                "device": None, "asr_device": "auto"}
+                "device": None, "asr_device": "auto", "asr_backend": "local"}
 
     monkeypatch.setattr(cli, "configuration", config)
     monkeypatch.setattr(cli, "reap_stale_sessions", lambda: None)

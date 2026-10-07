@@ -42,6 +42,8 @@ _lecture() {
             '--fast[尽快处理已有音频]' \
             '(--no-refine)--refine[课后 Qwen 离线校正，临时保留音频]' \
             '(--refine)--no-refine[关闭课后离线校正]' \
+            '(--no-auto-gain)--auto-gain[自动降低默认麦克风的削波音量]' \
+            '(--auto-gain)--no-auto-gain[关闭自动麦克风音量调节]' \
             '1:课程:->course'
           ;;
         demo)

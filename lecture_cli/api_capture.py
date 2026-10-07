@@ -17,6 +17,7 @@ from .audio_buffer import AudioBuffer, drain_timeout
 from .capture import Transcript
 from .refinement import BYTES_PER_SECOND, segment_cut
 from .storage import read_json, write_json
+from .mic_gain import mic_gain
 
 API_TIMEOUT = httpx.Timeout(60, connect=10)
 RETRY_WARNING = "转录服务暂不可用，正在重试；音频已暂存"
@@ -139,17 +140,22 @@ async def record(directory: Path, transport=None):
         finished = asyncio.Event()
         extracted = 0.0
         last_write = 0.0
+        gain = mic_gain(meta)
 
         def publish(force=False):
             nonlocal last_write
             if not force and time.monotonic() - last_write < 0.15:
                 return
+            if gain:
+                state["gain_notice"] = gain.notice
             state.update(audio.snapshot(), lag=max(0, extracted - state["seconds"]),
                          last=transcript.last, count=transcript.count)
             write_json(state_path, state)
             last_write = time.monotonic()
 
         def callback(indata, frames, timing, status):
+            if gain:
+                gain.observe(indata[:, 0])
             data = np.clip(indata[:, 0], -1, 1)
             pcm = (data * 32767).astype(np.int16).tobytes()
             audio.push(pcm, float(np.sqrt(np.mean(data * data))), bool(status.input_overflow))
@@ -161,9 +167,13 @@ async def record(directory: Path, transport=None):
                 if want_pause != paused:
                     paused = want_pause
                     audio.pause(paused)
+                    if gain:
+                        gain.pause(paused)
                     if stream:
                         stream.stop() if paused else stream.start()
                     state["status"] = "已暂停" if paused else "录制中"
+                    publish(True)
+                if gain and gain.poll():
                     publish(True)
                 publish()
                 # File input has no real-time pacing with --fast; do not outrun the bounded queue.

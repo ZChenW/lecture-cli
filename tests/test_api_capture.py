@@ -275,7 +275,7 @@ def test_configuration_key_precedence_and_no_key_completion(tmp_path, monkeypatc
     assert os.environ["LECTURE_ASR_API_KEY"] == "file-asr-key"
 
 
-def test_api_start_and_spawn_isolate_keys_and_skip_local_imports(tmp_path, monkeypatch):
+def test_api_start_and_spawn_isolate_keys_and_skip_local_imports(tmp_path, monkeypatch, capsys):
     course = tmp_path / "courses" / "MATH421"
     course.mkdir(parents=True)
     calls = {}
@@ -302,7 +302,8 @@ def test_api_start_and_spawn_isolate_keys_and_skip_local_imports(tmp_path, monke
         assert "fake-asr-key" not in json.dumps(meta)
         if role == "_capture":
             Transcript(directory).append("Cloud source.", 0, 1)
-            write_json(directory / "asr-state.json", {"status": "转录完成", "asr_device": "api"})
+            write_json(directory / "asr-state.json", {"status": "转录完成", "asr_device": "api",
+                       "gain_notice": "检测到削波，麦克风音量 85% → 54%"})
         return Process()
     monkeypatch.setattr(cli.subprocess, "Popen", spawn)
     assert cli.main(["--courses-dir", str(course.parent), "start", "MATH421", "--asr-backend", "api",
@@ -315,6 +316,7 @@ def test_api_start_and_spawn_isolate_keys_and_skip_local_imports(tmp_path, monke
     assert calls["_worker"][1]["DEEPSEEK_API_KEY"] == "fake-notes-key"
     assert "LECTURE_ASR_API_KEY" not in calls["_worker"][1]
     assert not (tmp_path / "config" / "lecture-cli" / "config.json").exists()
+    assert "麦克风音量：检测到削波，麦克风音量 85% → 54%" in capsys.readouterr().out
 
 
 @pytest.mark.parametrize("problem", ["key", "context"])
@@ -355,7 +357,7 @@ def test_capture_role_routes_to_api_module(tmp_path, monkeypatch):
     assert cli.main(["_capture", str(tmp_path)]) == 17
 
 
-def test_api_doctor_skips_local_probe(tmp_path, monkeypatch, capsys):
+def test_api_doctor_skips_local_probe(tmp_path, monkeypatch, capsys, fake_wpctl):
     config = cli.configuration()
     config.update(courses_dir=str(tmp_path), asr_backend="api")
     monkeypatch.setattr(cli, "capture_python", lambda *_: pytest.fail("local probe"))
@@ -370,6 +372,8 @@ def test_api_doctor_skips_local_probe(tmp_path, monkeypatch, capsys):
     assert cli.doctor(config) == 0
     output = capsys.readouterr().out
     assert "转录服务" in output and "转录 key" in output and "WhisperLiveKit" not in output
+    assert "✓ 默认源麦克风音量：85%" in output
+    assert fake_wpctl.calls == [["wpctl", "get-volume", "@DEFAULT_AUDIO_SOURCE@"]]
 
 
 def test_microphone_keeps_buffering_during_retry(tmp_path, monkeypatch):

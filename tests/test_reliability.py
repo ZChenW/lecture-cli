@@ -143,7 +143,7 @@ def test_producer_can_append_while_api_waits_and_worker_drains_last_batch(sessio
         if args and args[0] == 4000:
             return json.dumps(dict(continues_previous=False, topics=[
                 dict(title='课堂要点', question='讲了什么？', first=1, last=2)]))
-        return json.dumps(dict(body='课堂要点 [L1]', review='')) if args and args[0] == 8000 else '课堂要点 [L1]'
+        return '课堂要点 [L1]' if args and args[0] == 8000 else '课堂要点 [L1]'
     monkeypatch.setattr(worker, "complete", delayed)
     def run():
         try:
@@ -221,3 +221,26 @@ def test_reject_truncated_or_empty_api_output(reply, monkeypatch):
     monkeypatch.setattr(worker.httpx, "Client", Client)
     with pytest.raises(worker.APIError):
         worker.complete([], "deepseek-flash")
+
+
+@pytest.mark.parametrize("failure, transient", [
+    (503, True), (429, True), (400, False), (401, False),
+    (worker.httpx.ReadTimeout("slow"), True), (worker.httpx.ConnectError("offline"), True),
+])
+def test_only_network_and_server_failures_are_marked_transient(failure, transient, monkeypatch):
+    class Client:
+        def __init__(self, **kwargs):
+            pass
+        def __enter__(self):
+            return self
+        def __exit__(self, *args):
+            pass
+        def post(self, url, **kwargs):
+            if isinstance(failure, Exception):
+                raise failure
+            return SimpleNamespace(status_code=failure)
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "test-only")
+    monkeypatch.setattr(worker.httpx, "Client", Client)
+    with pytest.raises(worker.APIError) as caught:
+        worker.complete([], "deepseek-flash")
+    assert isinstance(caught.value, worker.TransientAPIError) is transient

@@ -66,7 +66,7 @@ def test_real_zsh_tab_completes_commands_courses_and_gpu_options(tmp_path):
             ("lecture diagnose-asr ", ["CS590OP_HW", "MATH421"]),
             ("lecture diagnose-asr MATH421 --model-a ", ["qwen3-asr-1.7b", "large-v3-turbo"]),
             ("lecture start --asr-", ["--asr-device", "--asr-model"]),
-            ("lecture start --", ["--refine", "--no-refine"]),
+            ("lecture start --", ["--refine", "--no-refine", "--auto-gain", "--no-auto-gain"]),
             (f"lecture --courses-dir {shlex.quote(str(courses))} start ", ["CS590OP_HW", "MATH421"]),
         ]:
             os.write(master, command.encode() + b"\t")

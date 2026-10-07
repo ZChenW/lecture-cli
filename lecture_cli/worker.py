@@ -30,6 +30,22 @@ class APIError(Exception):
     pass
 
 
+class TransientAPIError(APIError):
+    """Network failure, timeout, 429 or 5xx: the identical request may succeed."""
+
+
+def retrying(call, delays=(5, 20)):
+    # Final notes run once after class; one dropped request must not become raw fallback.
+    def wrapped(*args):
+        for delay in delays:
+            try:
+                return call(*args)
+            except TransientAPIError:
+                time.sleep(delay)
+        return call(*args)
+    return wrapped
+
+
 def validate_content(text: str, max_source: int | None = None, allowed_sources=None) -> None:
     # A small syntax check catches obvious omissions, not mathematical correctness.
     for match in re.finditer(r"\$\$(.*?)\$\$|\$(?!\$)(.*?)(?<!\\)\$", text, re.S):
@@ -76,7 +92,8 @@ def complete(messages: list[dict], model: str, max_tokens: int = 2000) -> str:
             )
         if response.status_code != 200:
             # Never log request headers, response bodies, keys, or proxy credentials.
-            raise APIError(f"DeepSeek HTTP {response.status_code}")
+            transient = response.status_code == 429 or response.status_code >= 500
+            raise (TransientAPIError if transient else APIError)(f"DeepSeek HTTP {response.status_code}")
         choice = response.json()["choices"][0]
         if choice.get("finish_reason") != "stop":
             raise APIError("DeepSeek 返回不完整，保留原文等待重试")
@@ -86,7 +103,8 @@ def complete(messages: list[dict], model: str, max_tokens: int = 2000) -> str:
         # Callers parse JSON before normalizing any Markdown fields inside it.
         return content.strip()
     except (httpx.HTTPError, KeyError, IndexError, ValueError, TypeError) as exc:
-        raise APIError(f"DeepSeek 请求失败（{type(exc).__name__}）") from None
+        error = TransientAPIError if isinstance(exc, httpx.TransportError) else APIError
+        raise error(f"DeepSeek 请求失败（{type(exc).__name__}）") from None
 
 
 def process_batch(journal: Journal, records: list[dict], call=None, *, batch=None) -> bool:
@@ -152,11 +170,11 @@ def run(directory: Path) -> int:
         capture_warning = " ".join(filter(None, [capture.get("error"), capture.get("warning")]))
         if capture_warning:
             journal.add_warning(capture_warning)
-        from .final_notes import generate
+        from .final_notes import WORKERS, generate
         if journal.meta.get("refine") and refined_events(directory) is None:
             from .refinement import WARNING
             journal.add_warning(WARNING)
-        generate(journal, final_events(directory))
+        generate(journal, final_events(directory), workers=WORKERS)
         journal.render(finished=True)
         detail_status = dict(journal.db.execute("SELECT key, value FROM info")).get("detail_status")
         write_json(state_path, {"status": "详细笔记未全部完成" if detail_status == "incomplete" else "完成",

@@ -40,7 +40,7 @@ def config_dir() -> Path:
 def configuration(load_key=True) -> dict:
     result = {"courses_dir": str(Path.home() / "Downloads" / "Umass_CS_Class"),
               "model": "deepseek-flash", "asr_model": "base.en", "language": "en",
-              "interval": 60, "device": None, "asr_device": "auto", "refine": False,
+              "interval": 60, "device": None, "asr_device": "auto", "refine": False, "auto_gain": True,
               "asr_backend": "local", "asr_api_base": "https://api.groq.com/openai/v1",
               "asr_api_model": "whisper-large-v3-turbo"}
     result.update(read_json(config_dir() / "config.json"))
@@ -160,6 +160,8 @@ def display(directory: Path, stage: str = "", worker_dead=False):
             "status", asr.get("refinement_warning") or "Qwen 1.7B · 下课后自动重转录")))
     if asr.get("device_notice"):
         table.add_row("设备提示", Text(asr["device_notice"]))
+    if asr.get("gain_notice"):
+        table.add_row("麦克风音量", Text(asr["gain_notice"]))
     level = min(20, int(asr.get("level", 0) * 150))
     table.add_row("输入音量", "▰" * level + "▱" * (20 - level))
     table.add_row("转录积压", f"{asr.get('lag', 0) + asr.get('queued', 0):.1f} 秒")
@@ -389,6 +391,8 @@ def session(args, config: dict, course: Path) -> int:
                 journal = Journal(directory)
                 try:
                     state = read_json(directory / "asr-state.json")
+                    if state.get("gain_notice"):
+                        console.print("麦克风音量：" + state["gain_notice"], markup=False)
                     if state.get("error") or state.get("warning"):
                         warning = " ".join(filter(None, [state.get("error"), state.get("warning")]))
                         journal.add_warning(warning)
@@ -524,6 +528,12 @@ def devices():
 
 def doctor(config):
     import importlib.util
+    from .mic_gain import read_volume, VolumeError
+    try:
+        volume, muted = read_volume()
+        console.print(f"✓ 默认源麦克风音量：{volume:.0%}" + ("（已静音）" if muted else ""), markup=False)
+    except VolumeError as exc:
+        console.print("✗ 默认源麦克风音量：" + str(exc), markup=False)
     checks = {"课程目录": Path(config["courses_dir"]).is_dir(),
               "DeepSeek key": bool(os.environ.get("DEEPSEEK_API_KEY")),
               "FFmpeg": bool(shutil.which("ffmpeg"))}
@@ -632,6 +642,8 @@ def main(argv=None):
             sub.add_argument("--asr-api-model", metavar="NAME", help="云端转录模型，仅影响本次运行")
             sub.add_argument("--refine", action=argparse.BooleanOptionalAction, default=None,
                              help="下课后用 Qwen 1.7B 重转录；临时保存音频，完成后删除")
+            sub.add_argument("--auto-gain", action=argparse.BooleanOptionalAction, default=None,
+                             help="自动降低 PipeWire 默认麦克风的削波音量，默认启用")
             sub.add_argument("--device", help="麦克风编号或名称")
             sub.add_argument("--language", help="课堂语言，默认 en")
             sub.add_argument("--audio-file", help="使用已有音频代替麦克风")
@@ -655,7 +667,7 @@ def main(argv=None):
         return 0
     config = configuration(load_key=args.command != "diagnose-asr")
     reap_stale_sessions()
-    for field in ("courses_dir", "asr_model", "asr_device", "interval", "device", "language", "refine", "asr_backend", "asr_api_model"):
+    for field in ("courses_dir", "asr_model", "asr_device", "interval", "device", "language", "refine", "auto_gain", "asr_backend", "asr_api_model"):
         if getattr(args, field, None) is not None:
             config[field] = getattr(args, field)
     if isinstance(config["device"], str) and config["device"].isdigit():

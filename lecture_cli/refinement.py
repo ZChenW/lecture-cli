@@ -1,6 +1,7 @@
 """Bounded local audio archive and atomic offline transcription replacement."""
 from __future__ import annotations
 
+from itertools import islice
 import json
 import math
 from pathlib import Path
@@ -10,6 +11,9 @@ from .storage import atomic_text, read_json, write_json
 MODEL = "qwen3-asr-1.7b"
 BYTES_PER_SECOND = 32000
 MAX_ARCHIVE_BYTES = 512 * 1024 * 1024
+# Measured on an 8 GB RTX 5060 with 20–30 s segments: 4 is about 2.8x faster than 1
+# at roughly 5.0 GiB reserved; 16 runs out of memory.
+BATCH = 4
 WARNING = "离线校正未完成，详细笔记使用实时转录；可能含听辨错误。"
 
 
@@ -102,31 +106,38 @@ def refine(directory: Path, transcribe=None) -> int:
             model = Qwen3ASRModel.from_pretrained(
                 QWEN_MODELS[MODEL], dtype="bfloat16" if device == "cuda" else "float32",
                 device_map="cuda:0" if device == "cuda" else "cpu",
-                max_inference_batch_size=1, max_new_tokens=1024,
+                max_inference_batch_size=BATCH, max_new_tokens=1024,
             )
             language = meta.get("language", "en")
             language = {"en": "English", "zh": "Chinese", "auto": None}.get(language, language)
 
-            def transcribe(pcm):
-                audio = np.frombuffer(pcm, dtype="<i2").astype(np.float32) / 32768
-                return model.transcribe(audio=(audio, 16000), language=language,
-                                        context=meta.get("asr_context", ""))[0].text
+            def transcribe_batch(batch):
+                audio = [(np.frombuffer(pcm, dtype="<i2").astype(np.float32) / 32768, 16000)
+                         for _, _, pcm in batch]
+                return [result.text for result in model.transcribe(
+                    audio=audio, language=language, context=meta.get("asr_context", ""))]
+        else:
+            def transcribe_batch(batch):
+                return [transcribe(pcm) for _, _, pcm in batch]
 
         records = []
-        for index, (start, end, pcm) in enumerate(segments(path), 1):
-            stage = f"离线校正第 {index} 段 · {timestamp(start)}–{timestamp(end)}"
-            write_json(state_path, {"status": stage,
-                                   "seconds": start})
-            text = transcribe(pcm).strip()
-            # Empty ASR is not evidence of silence. Reject the replacement rather
-            # than silently discard this interval (including the lecture tail).
-            if not text:
-                import numpy as np
-                samples = np.frombuffer(pcm, dtype="<i2").astype(np.float32)
-                if np.max(np.abs(samples), initial=0) > 32:
-                    raise ValueError("有声片段的离线转录为空")
-                text = "[近静音片段，未识别到文字]"
-            records.append(dict(id=index, start=timestamp(start), end=timestamp(end), text=text))
+        source = segments(path)
+        while batch := list(islice(source, BATCH)):
+            first = len(records) + 1
+            stage = (f"离线校正第 {first}–{first + len(batch) - 1} 段 · "
+                     f"{timestamp(batch[0][0])}–{timestamp(batch[-1][1])}")
+            write_json(state_path, {"status": stage, "seconds": batch[0][0]})
+            for (start, end, pcm), text in zip(batch, transcribe_batch(batch), strict=True):
+                text = text.strip()
+                # Empty ASR is not evidence of silence. Reject the replacement rather
+                # than silently discard this interval (including the lecture tail).
+                if not text:
+                    import numpy as np
+                    samples = np.frombuffer(pcm, dtype="<i2").astype(np.float32)
+                    if np.max(np.abs(samples), initial=0) > 32:
+                        raise ValueError("有声片段的离线转录为空")
+                    text = "[近静音片段，未识别到文字]"
+                records.append(dict(id=len(records) + 1, start=timestamp(start), end=timestamp(end), text=text))
         atomic_text(directory / "refined.jsonl", "".join(json.dumps(r, ensure_ascii=False) + "\n" for r in records))
         write_json(state_path, {"status": "离线校正完成", "complete": True,
                                "count": len(records), "seconds": archive["bytes"] / BYTES_PER_SECOND})

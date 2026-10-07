@@ -40,7 +40,7 @@ def test_topic_continues_across_request_boundary_and_originals_reach_writer(lect
         text = prompt.split('本章完整原始转录：')[1].split('后文衔接')[0]
         ids = [int(n) for n in re.findall(r'\[L(\d+) ', text)]
         seen.extend(ids)
-        return json.dumps(dict(body=f'理解连续变形。[L{ids[0]}]', review=f'- 缺少图示。[L{ids[-1]}]'))
+        return f'理解连续变形。[L{ids[0]}]\n<!-- REVIEW -->\n- 缺少图示。[L{ids[-1]}]'
     final_notes.generate(journal, source, api)
     outline = json.loads(dict(journal.db.execute('SELECT key, value FROM info'))['outline'])
     assert len(outline) == 1 and outline[0]['first'] == 1 and outline[0]['last'] == 8
@@ -109,28 +109,37 @@ def test_glossary_keeps_background_out_of_asr_and_rejects_oversized_hints(tmp_pa
         load_glossary(tmp_path)
 
 
-def test_structured_section_preserves_escaped_math_and_separates_review():
-    response = json.dumps(dict(body='## 定义\n\n' + r'定义 \(x=1\) [L1]', review='缺图 [L2]'))
+def test_markdown_section_keeps_latex_backslashes_and_separates_review():
+    # These commands begin with JSON escape letters (\f \b \n \t \r) or are invalid escapes (\a).
+    math = r'$$\frac{\beta}{\alpha} \neq \nabla \times \theta \rightarrow \tau$$'
+    response = '## 定义\n\n' + r'定义 \(x=1\) [L1]' + f'\n\n{math}\n<!-- REVIEW -->\n缺图 [L2]'
     parsed = worker.checked_completion([], 'model', 2,
         lambda messages, model, tokens: final_notes.section_response(
             messages, model, tokens, lambda *a: response), 8000)
-    assert '定义 $x=1$ [L1]' in parsed
+    assert '定义 $x=1$ [L1]' in parsed and math in parsed
     assert parsed.startswith('### 定义')
-    assert '\n<!-- REVIEW -->\n缺图 [L2]' in parsed
+    assert parsed.endswith('\n<!-- REVIEW -->\n缺图 [L2]')
 
 
-def test_html_comment_cannot_silently_hide_model_review(lecture):
+@pytest.mark.parametrize('response, hidden', [
+    ('正文 [L1]\n<!-- REVIEW\n疑点 [L2]\n-->', False),   # review written inside the marker
+    ('正文 [L1]\n<!-- 疑点 [L2] -->', True),
+])
+def test_html_comment_cannot_silently_hide_model_review(lecture, response, hidden):
     journal, records = lecture
     def api(messages, model, tokens):
         if tokens == final_notes.PLAN_TOKENS:
             return json.dumps(dict(continues_previous=False, topics=[
                 dict(title='主题', question='内容？', first=1, last=8)]))
-        return '正文 <!-- REVIEW\n疑点\n-->'
+        return response
     final_notes.generate(journal, records, api)
     info = dict(journal.db.execute('SELECT key, value FROM info'))
-    assert info['detail_status'] == 'incomplete'
     review = (journal.directory.parent / 'notes.review.md').read_text()
-    assert 'body/review' in review
+    assert '<!--' not in (journal.directory.parent / 'notes.md').read_text()
+    if hidden:
+        assert info['detail_status'] == 'incomplete' and '隐藏注释' in review
+    else:
+        assert info['detail_status'] == 'complete' and '疑点' in review
 
 
 def test_heading_cannot_hide_drifting_translation_in_prose():

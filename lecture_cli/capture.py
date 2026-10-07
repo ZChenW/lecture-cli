@@ -11,6 +11,7 @@ from pathlib import Path
 from .storage import read_json, write_json
 from .audio_buffer import AudioBuffer, drain_timeout
 from .asr import build_engine, session_context
+from .mic_gain import mic_gain
 
 
 def timestamp(seconds: float) -> str:
@@ -87,10 +88,13 @@ async def record(directory: Path) -> None:
     collector = None
     paused = False
     last_write = 0.0
+    gain = mic_gain(meta)
 
     def publish(force=False):
         nonlocal last_write
         if force or time.monotonic() - last_write > 0.15:
+            if gain:
+                state["gain_notice"] = gain.notice
             if not meta.get("audio_file"):
                 state.update(audio.snapshot())
             if state.get("input_overflows"):
@@ -103,6 +107,8 @@ async def record(directory: Path) -> None:
 
     def callback(indata, frames, timing, status):
         # Never call ASR or the network on PortAudio's callback thread.
+        if gain:
+            gain.observe(indata[:, 0])
         data = np.clip(indata[:, 0], -1, 1)
         pcm = (data * 32767).astype(np.int16).tobytes()
         level = float(np.sqrt(np.mean(data * data)))
@@ -144,10 +150,14 @@ async def record(directory: Path) -> None:
             if want_pause != paused:
                 paused = want_pause
                 audio.pause(paused)
+                if gain:
+                    gain.pause(paused)
                 if stream:
                     stream.stop() if paused else stream.start()
                 state["status"] = "已暂停" if paused else "录制中"
                 state["level"] = 0
+                publish(True)
+            if gain and gain.poll():
                 publish(True)
             if paused and not audio.snapshot()["queued"]:
                 await asyncio.sleep(0.1)
