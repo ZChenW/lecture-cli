@@ -114,14 +114,18 @@ def process_batch(journal: Journal, records: list[dict], call=None, *, batch=Non
         return False
     previous = [r for r in records if r["id"] <= journal.cursor][-5:]
     context = journal.meta.get("context", "")
+    notes = journal.bodies()[-5000:]
+    # The supplied notes carry their own citations; repeating one of them is not an invention.
+    supplied = {r['id'] for r in previous + batch} | {
+        i for m in CITATION.finditer(notes) for i in range(int(m[1]), int(m[2] or m[1]) + 1)}
     prompt = (f"课程：{journal.meta['course']}\n课程背景：\n{context}\n\n"
               f"课程词表（用于术语，不是课堂事实）：\n{notes_glossary(journal.meta)}\n\n"
-              f"此前笔记（仅上下文）：\n{journal.bodies()[-5000:]}\n\n"
+              f"此前笔记（仅上下文）：\n{notes}\n\n"
               f"此前原文（仅上下文）：\n{source_text(previous)[-3000:]}\n\n"
               f"本批新增转录：\n{merged_source_text(batch)}")
     body = checked_completion([{"role": "system", "content": SYSTEM}, {"role": "user", "content": prompt}],
                               journal.meta["model"], batch[-1]["id"], call,
-                              allowed_sources={r['id'] for r in previous + batch})
+                              allowed_sources=supplied)
     # The journal transaction commits content and cursor together. Rendering is replayable.
     journal.save(batch, body)
     return True

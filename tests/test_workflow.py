@@ -94,6 +94,23 @@ def test_citation_must_be_in_supplied_evidence():
         worker.validate_content(citation, 10, {5, 6})
 
 
+def test_live_batch_may_repeat_a_citation_from_the_supplied_notes(lecture):
+    # A short closing batch continues the previous sentence, whose note cites L1–L2.
+    # Only the last five source records are resent, so L1 reaches the model via the notes alone.
+    journal, source = lecture
+    journal.save(source[:7], '- 平面同痕的定义 [L1–L2]')
+    assert worker.process_batch(journal, source, lambda *a: '- 承接前文的定义 [L1–L2]，补充结论 [L8]')
+    assert journal.cursor == 8
+
+
+def test_live_batch_still_rejects_a_source_it_was_never_shown(lecture):
+    journal, source = lecture
+    journal.save(source[:7], '- 平面同痕的定义 [L6–L7]')
+    with pytest.raises(worker.APIError, match='未提供'):
+        worker.process_batch(journal, source, lambda *a: '- 凭空引用 [L1]，补充结论 [L8]')
+    assert journal.cursor == 7
+
+
 def test_glossary_keeps_background_out_of_asr_and_rejects_oversized_hints(tmp_path):
     assert load_glossary(tmp_path) == dict(asr_context='', glossary=[])
     entries = [dict(term='planar isotopy', translation='平面同痕', source='讲义 p.31')]

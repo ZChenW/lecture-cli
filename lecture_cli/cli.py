@@ -258,6 +258,7 @@ def session(args, config: dict, course: Path) -> int:
     detail_incomplete = False
     refinement_failed = False
     persisted = False
+    stages = [("录制与转录", time.monotonic())]
     owner_lock = (directory / "owner.lock").open("w")
     fcntl.flock(owner_lock, fcntl.LOCK_EX)
 
@@ -333,6 +334,7 @@ def session(args, config: dict, course: Path) -> int:
             # atomically ready. The capture child has exited and freed its GPU.
             if meta["refine"]:
                 from .refinement import timeout_seconds, WARNING
+                stages.append(("离线校正", time.monotonic()))
                 if capture.returncode == 0:
                     refinement = spawn("_refine")
                     meta["children"].append(refinement.pid)
@@ -368,6 +370,7 @@ def session(args, config: dict, course: Path) -> int:
                         "status": WARNING, "complete": False, "stage": "录音收尾",
                         "reason": "录音进程异常退出，未启动离线校正"})
             (directory / "capture.done").touch()
+            stages.append(("课后笔记", time.monotonic()))
             from .final_notes import finish_timeout
             deadline = time.monotonic() + finish_timeout(events(directory), read_json(directory / "notes-state.json").get("cursor", 0))
             if meta["refine"]:
@@ -375,6 +378,7 @@ def session(args, config: dict, course: Path) -> int:
             while worker.poll() is None and time.monotonic() < deadline:
                 live.update(display(directory, "正在保存最后的笔记…"), refresh=True)
                 time.sleep(0.2)
+            stages.append(("", time.monotonic()))
     finally:
         # Stop children before deleting their workspace. Also covers Ctrl+C/TERM/HUP and exceptions.
         for process in (capture, refinement, worker):
@@ -422,6 +426,10 @@ def session(args, config: dict, course: Path) -> int:
                 for sig, handler in handlers.items():
                     signal.signal(sig, handler)
     console.print(f"已保存：{output}\n本次 /tmp 中间文件已清理。", markup=False)
+    if not stages[-1][0]:
+        console.print("耗时：" + " · ".join(
+            f"{name} {int(end - begin) // 60}:{int(end - begin) % 60:02}"
+            for (name, begin), (_, end) in zip(stages, stages[1:])), markup=False)
     if refinement_failed:
         from .refinement import WARNING
         console.print(WARNING, style="yellow", markup=False)
