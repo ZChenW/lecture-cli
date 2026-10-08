@@ -523,6 +523,10 @@ def test_real_controller_refines_through_a_local_fake_service(tmp_path, status, 
     ("好的...我们继续", "好的...我们继续"),  # A run of dots is not a full stop.
     ("版本v1.2发布", "版本v1.2发布"),
     ("（括号）.", "（括号）。"),  # Full-width forms count as Chinese neighbours.
+    # GUI-4 fix: the small ideographic comma U+FE51 always becomes a full-width comma.
+    ("向量\ufe51矩阵\ufe51 行列式", "向量，矩阵，行列式"),
+    ("A\ufe51B", "A，B"),
+    ("例如\ufe51.", "例如，。"),  # the comma it becomes is a Chinese neighbour like any other
 ])
 def test_full_width_only_beside_chinese(text, expected):
     assert cloud_refine.full_width(text) == expected
@@ -531,13 +535,13 @@ def test_full_width_only_beside_chinese(text, expected):
 def test_chinese_refinement_gets_full_width_punctuation_and_others_do_not(tmp_path):
     session(tmp_path)
     archive(tmp_path, voiced(5))
-    assert run(tmp_path, Service([{"text": "特征值,特征向量. e.g. 3.14"}])) == 0
+    assert run(tmp_path, Service([{"text": "特征值,特征向量\ufe51特征多项式. e.g. 3.14"}])) == 0
     records = [json.loads(line) for line in (tmp_path / "refined.jsonl").read_text().splitlines()]
-    assert [r["text"] for r in records] == ["特征值，特征向量。e.g. 3.14"]
+    assert [r["text"] for r in records] == ["特征值，特征向量，特征多项式。e.g. 3.14"]
     english = tmp_path / "en"
     english.mkdir()
     session(english, language="en")
     archive(english, voiced(5))
-    assert run(english, Service([{"text": "特征值,特征向量."}])) == 0
+    assert run(english, Service([{"text": "特征值,特征向量\ufe51."}])) == 0
     records = [json.loads(line) for line in (english / "refined.jsonl").read_text().splitlines()]
-    assert [r["text"] for r in records] == ["特征值,特征向量."]
+    assert [r["text"] for r in records] == ["特征值,特征向量\ufe51."]
