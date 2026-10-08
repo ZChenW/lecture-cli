@@ -2,7 +2,10 @@
 export type Level = "ok" | "warn" | "fail";
 
 export interface Problem { field: string; message: string }
-export interface KeyStatus { set: boolean; source: "env" | "file" | null; tail: string | null }
+// variable: the environment variable a key came from; stored: a key file holds the same value.
+export interface KeyStatus {
+  set: boolean; source: "env" | "file" | null; tail: string | null; variable?: string | null; stored?: boolean;
+}
 export interface Keys { notes: KeyStatus; asr: KeyStatus }
 export interface Result { ok: boolean; level: Level; message: string }
 export interface Check { id: string; label: string; level: Level; detail: string; hint: string }
@@ -26,15 +29,27 @@ export interface Config {
   refine_model: string;
   auto_gain: boolean;
   qwen_python: string | null;
+  onboarded?: boolean;
+  course_settings?: Record<string, { language?: string }>;
   [key: string]: unknown;
 }
 
 export interface NotesPreset { label: string; api_base: string; model: string; extra_body: Record<string, unknown> }
 export interface AsrPreset { label: string; api_base: string; model: string }
 
+/** What a lecture cannot start without (config.REQUIRED). */
+export type Missing = "courses_dir" | "notes_key" | "asr_key";
+
+export type OpenerKind = "file_manager" | "terminal" | "editor";
+export interface OpenerInfo {
+  label: string; programs: string[]; available: string[]; selected: string | null; effective: string | null; custom: boolean;
+}
+export type Openers = Record<OpenerKind, OpenerInfo>;
+
 export interface Bootstrap {
   version: string;
   configured: boolean;
+  missing: Missing[];
   problems: Problem[];
   config: Config;
   keys: Keys;
@@ -46,6 +61,7 @@ export interface Course { name: string; path: string; notes_count: number; last_
 export interface Note {
   name: string; path: string; started: string | null; kind: string | null;
   attachments: { transcript: boolean; live: boolean; review: boolean };
+  review_count?: number;
 }
 export interface AsrModel { name: string; family: "whisper" | "qwen"; cached: boolean; env_ready: boolean }
 export interface Device { index: number; name: string; channels: number; default: boolean }

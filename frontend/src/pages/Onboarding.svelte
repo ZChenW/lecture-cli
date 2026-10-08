@@ -1,4 +1,6 @@
 <script lang="ts">
+  // design/E-wizard.reference.html: the step number and title on the left, the step's choices
+  // on the right, skip links on both ends. Every step can be skipped (plan N2.4).
   import { onDestroy } from "svelte";
   import { api, subscribe, type Subscription } from "../lib/api";
   import type { FixTarget } from "../lib/checks";
@@ -9,26 +11,31 @@
   import AsrForm from "../components/AsrForm.svelte";
   import ChecksPanel from "../components/ChecksPanel.svelte";
   import CoursesDirForm from "../components/CoursesDirForm.svelte";
-  import Icon from "../components/Icon.svelte";
   import MicForm from "../components/MicForm.svelte";
   import NotesForm from "../components/NotesForm.svelte";
+  import Select from "../components/Select.svelte";
 
   const steps = [
-    { label: "课程目录", title: "笔记存放在哪里", lead: "选一个文件夹，用来存放所有课程的笔记。" },
-    { label: "转录方式", title: "怎样把声音变成文字", lead: "本地转录不上传音频；没有 NVIDIA GPU 时，云端更快。" },
-    { label: "笔记服务", title: "由哪个模型写笔记", lead: "转录文字会定期发给这个服务，生成结构化笔记。" },
-    { label: "麦克风", title: "用哪个麦克风", lead: "一般保持系统默认即可。" },
-    { label: "检查", title: "最后检查一遍", lead: "失败项下方有修复建议。也可以先试运行一次。" },
+    { label: "课程目录", title: ["笔记存放", "在哪里"] },
+    { label: "转录方式", title: ["怎样把声音", "变成文字"] },
+    { label: "笔记服务", title: ["由哪个模型", "写笔记"] },
+    { label: "麦克风", title: ["用哪个", "麦克风"] },
+    { label: "检查", title: ["最后", "检查一遍"] },
   ];
   const pad = (n: number) => String(n).padStart(2, "0");
+  const boot = app.boot!;
 
   let step = $state(0);
   let ready = $state(false);
   let busy = $state(false);
   let form = $state<{ save(): Promise<boolean> }>();
+  // What each step ended as in this visit; a step already set up before shows as set.
+  let outcome = $state<("set" | "skipped" | null)[]>([
+    boot.missing.includes("courses_dir") ? null : "set", null,
+    boot.missing.includes("notes_key") ? null : "set", null, null,
+  ]);
   // Preselect from the GPU probe only while the transcription choice is still the default one.
-  const config = app.boot!.config;
-  const freshAsr = config.asr_backend === "local" && config.asr_model === "base.en";
+  const freshAsr = boot.config.asr_backend === "local" && boot.config.asr_model === "base.en";
   let gpu = $state<boolean | null>(null);
   api.checks().then((list) => {
     const probe = list.find((c) => c.id === "asr_device");
@@ -37,7 +44,6 @@
 
   let checks = $state<Check[] | null>(null);
   let panel = $state<ChecksPanel>();
-  let override = $state(false);
   let failing = $derived(!checks || checks.some((c) => c.level === "fail"));
 
   let courses = $state<Course[]>([]);
@@ -54,23 +60,47 @@
     }).catch(() => (courses = []));
   });
 
-  async function next() {
+  function go(target: number) {
+    step = target;
+    ready = step === 3;
+    error = "";
+    document.querySelector<HTMLElement>(".wizard .scroll")?.scrollTo(0, 0);
+  }
+
+  /** Leaves the wizard for home, remembering that it is done so it does not open again. */
+  async function enter() {
     busy = true;
     try {
-      error = "";
-      if (step < 4 && form && !(await form.save())) return;
+      await api.saveConfig({ onboarded: true });
       await refresh();
-      if (step < steps.length - 1) {
-        step += 1;
-        ready = step === 3;
-      } else {
-        navigate("home");
-      }
+      navigate("home");
     } catch (e) {
       error = message(e);
     } finally {
       busy = false;
     }
+  }
+
+  async function next() {
+    if (step === steps.length - 1) return enter();
+    busy = true;
+    try {
+      error = "";
+      if (form && !(await form.save())) return;
+      await refresh();
+      outcome[step] = "set";
+      go(step + 1);
+    } catch (e) {
+      error = message(e);
+    } finally {
+      busy = false;
+    }
+  }
+
+  function skip() {
+    outcome[step] = outcome[step] === "set" ? "set" : "skipped";
+    if (step === steps.length - 1) enter();
+    else go(step + 1);
   }
 
   // The wizard has no refine step; that one opens the settings section instead.
@@ -80,14 +110,8 @@
       app.section = "refine";
       navigate("settings");
     } else {
-      step = STEPS[target];
-      ready = step === 3;
+      go(STEPS[target]);
     }
-  }
-
-  function back() {
-    step -= 1;
-    ready = false;
   }
 
   async function tryRun() {
@@ -116,140 +140,186 @@
     }
   }
   let demoRunning = $derived(!!demo && !demo.record && !demo.error);
-  let canFinish = $derived(step < 4 ? ready : !demoRunning && (!failing || override));
+  let canNext = $derived(step < 4 ? ready : !demoRunning && !failing);
 </script>
 
 <div class="wizard">
-  <div class="glow" aria-hidden="true"></div>
   <header class="top">
     <span class="brand">lecture</span>
-    <span class="label mono latin" aria-label="第 {step + 1} 步，共 {steps.length} 步">{pad(step + 1)} / {pad(steps.length)}</span>
-    <span class="label">{steps[step].label}</span>
+    <button type="button" class="quiet" onclick={enter} disabled={busy}>全部跳过，直接进入</button>
   </header>
 
   <div class="scroll">
     <main class="body">
-      <h1>{steps[step].title}</h1>
-      <p class="lead">{steps[step].lead}</p>
-      {#key step}
-        {#if step === 0}
-          <CoursesDirForm bind:ready bind:this={form} />
-        {:else if step === 1}
-          <AsrForm bind:ready bind:this={form} gpu={freshAsr ? gpu : undefined} />
-          {#if freshAsr && gpu === null}<p class="hint" role="status">正在检测 GPU…</p>{/if}
-        {:else if step === 2}
-          <NotesForm bind:ready bind:this={form} />
-        {:else if step === 3}
-          <MicForm bind:this={form} />
-        {:else}
-          <div class="stack">
-            <ChecksPanel bind:results={checks} bind:this={panel} onfix={fix}
-            fixText={(t) => t === "refine" ? "前往设置：课后校正" : `回到「${steps[STEPS[t]].label}」这一步`} />
-            <section class="stack demo" aria-label="试运行">
-              <p class="hint">试运行用一段自造的文字走一遍完整流程，不录音；会消耗少量笔记服务 API 额度。</p>
-              {#if courses.length}
-                <div class="row">
-                  {#if courses.length > 1}
-                    <label class="field">
-                      <span>写入课程</span>
-                      <select class="input" bind:value={demoCourse} disabled={demoRunning}>
-                        {#each courses as course}<option value={course.name}>{course.name}</option>{/each}
-                      </select>
-                    </label>
-                  {/if}
-                  <button type="button" class="btn" onclick={tryRun} disabled={demoRunning}>试运行一次</button>
-                </div>
-              {:else}
-                <p class="warn-text">试运行需要至少一门课程，请回到第一步新建。</p>
-              {/if}
-              {#if demo?.snapshot && !demo.record}
-                <p class="hint" role="status">{phaseLabel(demo.snapshot.phase)} · {demo.snapshot.notes.status}</p>
-              {/if}
-              {#if demo?.record}
-                {#if demo.record.status === "done"}
-                  <p class="ok-text" role="status"><Icon name="ok" size={16} /> 试运行成功，演示笔记已保存到 {demo.record.output}</p>
+      <section class="intro" aria-label="第 {step + 1} 步，共 {steps.length} 步">
+        <div class="number" aria-hidden="true">{pad(step + 1)}</div>
+        <h1>{steps[step].title[0]}<br />{steps[step].title[1]}</h1>
+        <ol>
+          {#each steps as item, i (item.label)}
+            <li class:current={i === step} aria-current={i === step ? "step" : undefined}>
+              <span class="n">{pad(i + 1)}</span>{item.label}
+              {#if i !== step && outcome[i]}<span class="state">{outcome[i] === "set" ? "已设置" : "稍后设置"}</span>{/if}
+            </li>
+          {/each}
+        </ol>
+      </section>
+
+      <section class="step" aria-label={steps[step].label}>
+        {#key step}
+          {#if step === 0}
+            <CoursesDirForm bind:ready bind:this={form} />
+          {:else if step === 1}
+            <AsrForm look="rows" bind:ready bind:this={form} {gpu} preselect={freshAsr} />
+            {#if freshAsr && gpu === null}<p class="hint" role="status">正在检测 GPU…</p>{/if}
+          {:else if step === 2}
+            <NotesForm look="rows" bind:ready bind:this={form} />
+          {:else if step === 3}
+            <MicForm look="rows" bind:this={form} />
+          {:else}
+            <div class="stack">
+              <ChecksPanel bind:results={checks} bind:this={panel} onfix={fix}
+                fixText={(t) => t === "refine" ? "前往设置：课后校正" : `回到「${steps[STEPS[t]].label}」这一步`} />
+              <section class="stack demo" aria-label="试运行">
+                <p class="hint">试运行用一段自造的文字走一遍完整流程，不录音；会消耗少量笔记服务 API 额度。</p>
+                {#if courses.length}
+                  <div class="demo-row">
+                    {#if courses.length > 1}
+                      <div class="field">
+                        <span id="demo-course">写入课程</span>
+                        <Select labelledby="demo-course" bind:value={demoCourse} disabled={demoRunning}
+                          options={courses.map((c) => ({ value: c.name, label: c.name }))} />
+                      </div>
+                    {/if}
+                    <button type="button" class="btn" onclick={tryRun} disabled={demoRunning}>试运行一次</button>
+                  </div>
                 {:else}
-                  <p class="error-text" role="alert">试运行没有成功（{demo.record.status}）。</p>
-                  {#if demo.record.log}<p class="hint">日志：<span class="mono">{demo.record.log}</span></p>{/if}
+                  <p class="warn-text">试运行需要至少一门课程，请回到第一步新建。</p>
                 {/if}
-                {#each demo.record.warnings ?? [] as warning}<p class="warn-text">{warning}</p>{/each}
+                {#if demo?.snapshot && !demo.record}
+                  <p class="hint" role="status">{phaseLabel(demo.snapshot.phase)} · {demo.snapshot.notes.status}</p>
+                {/if}
+                {#if demo?.record}
+                  {#if demo.record.status === "done"}
+                    <p class="ok-text" role="status">试运行成功，演示笔记已保存到 {demo.record.output}</p>
+                  {:else}
+                    <p class="error-text" role="alert">试运行没有成功（{demo.record.status}）。</p>
+                    {#if demo.record.log}<p class="hint">日志：<span class="mono">{demo.record.log}</span></p>{/if}
+                  {/if}
+                  {#each demo.record.warnings ?? [] as warning}<p class="warn-text">{warning}</p>{/each}
+                {/if}
+                {#if demo?.error}
+                  <p class="error-text" role="alert">{demo.error}</p>
+                  {#if demo.log}<pre class="log">{demo.log}</pre>{/if}
+                {/if}
+              </section>
+              {#if checks && failing}
+                <p class="hint">还有未通过的检查。可以先进入，之后在设置的「环境检查」里重新检查。</p>
               {/if}
-              {#if demo?.error}
-                <p class="error-text" role="alert">{demo.error}</p>
-                {#if demo.log}<pre class="log">{demo.log}</pre>{/if}
-              {/if}
-            </section>
-            {#if checks && failing}
-              <label class="check">
-                <input type="checkbox" bind:checked={override} />
-                仍然继续（之后可在设置里重新检查）
-              </label>
-            {/if}
-          </div>
-        {/if}
-      {/key}
+            </div>
+          {/if}
+        {/key}
+      </section>
     </main>
   </div>
 
   <footer class="bottom">
+    <button type="button" class="quiet" onclick={skip} disabled={busy}>这一步稍后再设置</button>
     {#if error}<p class="error-text grow" role="alert">{error}</p>{/if}
-    {#if step > 0}
-      <button type="button" class="btn large" onclick={back} disabled={busy}><Icon name="back" />上一步</button>
-    {/if}
-    <button type="button" class="btn large primary" onclick={next} disabled={busy || !canFinish}>
-      {step === steps.length - 1 ? "完成" : "下一步"}<Icon name={step === steps.length - 1 ? "ok" : "next"} />
-    </button>
+    <div class="buttons">
+      {#if step > 0}<button type="button" class="pill" onclick={() => go(step - 1)} disabled={busy}>上一步</button>{/if}
+      <button type="button" class="pill primary" onclick={next} disabled={busy || !canNext}>
+        {step === steps.length - 1 ? "完成" : "下一步"}
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+          stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d={step === steps.length - 1 ? "M5 12.5l4.5 4.5L19 7.5" : "M5 12h14M13 6l6 6-6 6"} /></svg>
+      </button>
+    </div>
   </footer>
 </div>
 
 <style>
-  /* Header and navigation stay put; only the step's content scrolls. */
+  /* Values from design/E-wizard.reference.html. The header and footer stay put and the middle
+     scrolls, so "下一步" is always in reach. */
   .wizard {
-    position: relative;
+    --mono: "Geist Mono", monospace;
     height: 100vh;
     display: flex;
     flex-direction: column;
     overflow: hidden;
+    padding: 28px 44px 0;
+    background: #0B0C0E;
+    color: #ECEAE4;
+    font-family: "Geist", "Noto Sans CJK SC", system-ui, sans-serif;
+    font-size: 16px;
+    line-height: normal;
   }
-  /* The page's single gradient sits behind the step title. */
-  .glow {
-    position: absolute;
-    left: calc(50% - 690px);
-    top: -330px;
-    width: 900px;
-    height: 900px;
-    background: radial-gradient(closest-side, rgba(212, 255, 92, 0.09), rgba(212, 255, 92, 0));
-    pointer-events: none;
-  }
-  .top, .scroll, .bottom { position: relative; }
-  .top { display: flex; align-items: baseline; gap: 24px; padding: 28px 44px 0; }
-  .brand { font-family: var(--display); font-size: 28px; line-height: 1; margin-right: auto; }
-  .scroll { flex: 1; min-height: 0; overflow-y: auto; padding: 0 44px; }
-  .body {
-    max-width: 680px;
-    margin: 0 auto;
-    padding: 48px 0 40px;
+  .top { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
+  .brand { font-family: "Instrument Serif", serif; font-size: 26px; }
+  .quiet {
+    font-size: 14px;
+    color: #A9ABB0;
+    text-decoration: underline;
+    text-underline-offset: 4px;
+    min-height: 44px;
     display: flex;
-    flex-direction: column;
-    gap: 16px;
+    align-items: center;
+    border: none;
+    background: none;
+    padding: 0;
+    cursor: pointer;
   }
-  h1 { font-family: var(--display); font-weight: 400; font-size: 52px; line-height: 1.05; letter-spacing: -0.01em; }
-  .lead { color: var(--muted); margin-bottom: 16px; }
+  .quiet:hover { color: #FFFFFF; }
+  .scroll { flex: 1; min-height: 0; overflow-y: auto; margin: 0 -44px; padding: 0 44px; }
+  .body { display: flex; flex-wrap: wrap; gap: 40px 96px; align-items: flex-start; padding: 72px 0 40px; }
+  .intro { flex: 1 1 320px; max-width: 440px; display: flex; flex-direction: column; gap: 36px; }
+  .number { font-family: "Instrument Serif", serif; font-size: 168px; line-height: 0.8; letter-spacing: -0.03em; color: #ECEAE4; }
+  h1 { margin: 0; font-family: "Noto Serif CJK SC", serif; font-weight: 400; font-size: 40px; line-height: 1.25; }
+  ol { margin: 12px 0 0; padding: 0; list-style: none; display: flex; flex-direction: column; font-size: 14px; }
+  li { display: flex; align-items: center; gap: 16px; min-height: 36px; color: #8E9096; }
+  li.current { color: #ECEAE4; }
+  .n { font-family: "Geist Mono", monospace; font-size: 12px; width: 20px; }
+  .current .n { color: var(--accent); }
+  .state { font-family: "Geist Mono", monospace; font-size: 12px; margin-left: auto; }
+  .step { flex: 999 1 480px; min-width: 0; max-width: 720px; display: flex; flex-direction: column; gap: 16px; }
   .demo { padding-top: 16px; border-top: 1px solid var(--line); }
+  .demo-row { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 24px; }
+  .demo-row .field { flex: 1 1 240px; }
   .bottom {
     display: flex;
-    justify-content: flex-end;
+    flex-wrap: wrap;
     align-items: center;
-    gap: 12px;
-    padding: 20px 44px 32px;
-    border-top: 1px solid var(--line);
+    justify-content: space-between;
+    gap: 16px;
+    border-top: 1px solid #1D1F23;
+    padding: 20px 0 28px;
   }
-  .grow { margin-right: auto; }
+  .grow { flex: 1; }
+  .buttons { display: flex; align-items: center; gap: 12px; }
+  .pill {
+    height: 52px;
+    padding: 0 24px;
+    border-radius: 999px;
+    border: 1px solid #34363B;
+    background: transparent;
+    color: #ECEAE4;
+    font-size: 15px;
+    cursor: pointer;
+  }
+  .pill.primary {
+    padding: 0 28px;
+    border: none;
+    background: var(--accent);
+    color: #0B0C0E;
+    font-weight: 600;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+  .pill:disabled { opacity: 0.45; cursor: not-allowed; }
   @media (max-width: 900px) {
-    .top { padding: 20px 20px 0; }
-    .scroll { padding: 0 20px; }
-    .bottom { padding: 16px 20px 24px; }
-    .glow { left: -330px; }
-    h1 { font-size: 40px; }
+    .wizard { padding: 20px 20px 0; }
+    .scroll { margin: 0 -20px; padding: 0 20px; }
+    .body { padding: 40px 0 32px; }
+    .number { font-size: 120px; }
+    h1 { font-size: 32px; }
   }
 </style>

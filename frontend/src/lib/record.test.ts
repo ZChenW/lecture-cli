@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
-  chapterStatus, closingStages, destinationLine, isTyping, levelShare, lyrics, micPercent, progressOf, pushLevel, savedPath, segmentTime, tailText, updatedAgo,
+  chapterStatus, closingHint, closingStages, gainState, refineEta, destinationLine, isTyping, levelShare, lyrics, micPercent, progressOf, pushLevel, savedPath, segmentTime, tailText, updatedAgo,
   waveBars, WAVE_BARS,
 } from "./record";
 import type { Snapshot } from "./types";
@@ -99,6 +99,32 @@ describe("closing stages", () => {
     expect(plain.map((s) => [s.label, s.state])).toEqual([
       ["完成末尾转录", "current"], ["编写详细笔记", "pending"], ["保存", "pending"]]);
     expect(plain[0].status).toBe("转录收尾中");
+  });
+});
+
+describe("N2.5 recording texts", () => {
+  it("estimates the closing work before 下课 and the refine time left", () => {
+    expect(closingHint(null)).toBe("");
+    expect(closingHint(45)).toBe("下课后还需不到一分钟整理");
+    expect(closingHint(400)).toBe("下课后还需约 7 分钟整理");
+    expect(refineEta(null)).toBe("正在估算");
+    expect(refineEta(30)).toBe("约剩不到一分钟");
+    expect(refineEta(150)).toBe("约剩 3 分钟");
+  });
+
+  it("shows refine progress as a bar even before a rate is known", () => {
+    const at = (progress: number | null, eta: number | null) => closingStages(snap({
+      phase: "refining", refine: { enabled: true, status: "转录中", reason: null, progress, eta_seconds: eta } }), 0)[1];
+    expect(at(0.42, 300)).toMatchObject({ key: "refining", state: "current", status: "约剩 5 分钟", progress: { done: 42, total: 100 } });
+    expect(at(null, null)).toMatchObject({ status: "正在估算", progress: { done: 0, total: 100 } });
+  });
+
+  it("puts the mic volume notice in the mic cell", () => {
+    const asr = (text: string) => snap({}).asr && { ...snap({}).asr, notices: text ? [{ kind: "gain", text }] : [] };
+    expect(gainState(asr(""))).toBeNull();
+    expect(gainState(asr("80% · 自动降低削波音量已启用"))).toEqual({ cell: "自动调节开", detail: "80% · 自动降低削波音量已启用", warn: false });
+    expect(gainState(asr("所选麦克风不是 PipeWire 默认源，未启用自动音量调节。"))?.cell).toBe("自动调节关");
+    expect(gainState(asr("默认麦克风已静音；请手动取消静音，自动调节不会取消静音。"))?.warn).toBe(true);
   });
 });
 

@@ -8,6 +8,7 @@
   import { api, subscribe, type Subscription } from "../lib/api";
   import { formatNoteDate } from "../lib/format";
   import { CLOSING_PHASES, isTyping, pushLevel } from "../lib/record";
+  import { navigate } from "../lib/router";
   import { app, message } from "../lib/state.svelte";
   import type { RunRecord, Snapshot } from "../lib/types";
 
@@ -20,6 +21,7 @@
   let samples = $state<number[]>([]);
   let drainStart = $state<number | null>(null);
   let armed = $state(false);
+  let discarding = $state(false);
   let busy = $state(false);
   let error = $state("");
   let now = $state(Date.now());
@@ -74,11 +76,18 @@
   }
 
   function finish(done: RunRecord) {
-    record = done;
     stream?.close();
+    // A discarded lecture is not an outcome to show: straight back home (plan N2.5).
+    if (done.status === "discarded") {
+      if (app.boot) app.boot.active_run = null;
+      app.recording = false;
+      navigate("home");
+      return;
+    }
+    record = done;
   }
 
-  async function act(action: "pause" | "resume" | "stop" | "skip-refine") {
+  async function act(action: "pause" | "resume" | "stop" | "skip-refine" | "discard") {
     busy = true;
     error = "";
     try {
@@ -88,6 +97,11 @@
     } finally {
       busy = false;
     }
+  }
+
+  async function discard() {
+    await act("discard");
+    if (!error) discarding = true;
   }
 
   // Buttons stay focusable while a request is out (aria-disabled), so a busy press is ignored here.
@@ -155,9 +169,10 @@
 
 <div class="record">
   <div class="glow" aria-hidden="true"></div>
-  <RecordHeader {snapshot} />
+  <RecordHeader {snapshot} ondiscard={recording && snapshot?.phase === "recording" && !discarding ? discard : undefined} />
   {#if snapshot && !record}<Banner asr={snapshot.asr} />{/if}
   {#if error}<p class="failure" role="alert">{error}</p>{/if}
+  {#if discarding}<p class="discarding" role="status">正在放弃这堂课，录音和笔记会被删除…</p>{/if}
   {#if record}
     <Ended {record} elapsed={snapshot?.elapsed_seconds ?? null} {dateline} />
   {:else if snapshot && closing}
@@ -206,6 +221,7 @@
     pointer-events: none;
   }
   .failure { position: relative; margin: 0; font-size: 13px; color: #FF6B5E; }
+  .discarding { position: relative; margin: 0; font-size: 13px; color: #A9ABB0; }
   .missing { flex: 1; position: relative; display: flex; flex-direction: column; justify-content: center; gap: 22px; }
   h1 { margin: 0; font-size: 38px; line-height: 1.25; font-weight: 400; letter-spacing: -0.01em; color: #FFFFFF; }
   .home {

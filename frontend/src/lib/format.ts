@@ -26,6 +26,8 @@ export function formatNoteTime(started: string | null): string {
 export function bannerItems(asr: Snapshot["asr"]): Notice[] {
   const items: Notice[] = asr.error ? [{ kind: "error", text: asr.error }] : [];
   for (const notice of asr.notices) {
+    // The mic volume notice lives in the mic cell; only its warnings also get a banner (plan N2.5).
+    if (notice.kind === "gain" && !/静音|下限/.test(notice.text)) continue;
     if (notice.text && !items.some((item) => item.text === notice.text)) items.push(notice);
   }
   return items;

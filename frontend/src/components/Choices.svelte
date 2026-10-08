@@ -1,55 +1,102 @@
 <script lang="ts">
-  // Radio cards: the transcription methods and the service presets share this look.
-  interface Option { value: string; title: string; text?: string }
-  let { name, label, options, value = $bindable(), compact = false, onchange }: {
-    name: string; label: string; options: Option[]; value: string; compact?: boolean; onchange?: (value: string) => void;
+  // Plan section 1, rule 1: no rounded cards with radio dots. The light UI uses underlined
+  // segments (design/D-settings.reference.html), the dark UI full rows separated by thin lines
+  // (design/E-wizard.reference.html). Both are a radiogroup with roving focus and arrow keys.
+  interface Option { value: string; title: string; text?: string; aside?: string }
+  let { label, options, value = $bindable(), look = "tabs", compact = false, onchange }: {
+    label: string; options: Option[]; value: string; look?: "tabs" | "rows"; compact?: boolean;
+    onchange?: (value: string) => void;
   } = $props();
+  let group = $state<HTMLElement>();
+  let current = $derived(options.find((option) => option.value === value));
 
   function choose(next: string) {
+    if (next === value) return;
     value = next;
     onchange?.(next);
+    group?.dispatchEvent(new Event("change", { bubbles: true }));
+  }
+
+  function onkey(event: KeyboardEvent) {
+    const step = { ArrowRight: 1, ArrowDown: 1, ArrowLeft: -1, ArrowUp: -1 }[event.key];
+    const index = options.findIndex((option) => option.value === value);
+    let target: number | null = null;
+    if (step) target = (index + step + options.length) % options.length;
+    else if (event.key === "Home") target = 0;
+    else if (event.key === "End") target = options.length - 1;
+    if (target == null) return;
+    event.preventDefault();
+    choose(options[target].value);
+    group?.querySelectorAll<HTMLElement>('[role="radio"]')[target]?.focus();
   }
 </script>
 
-<div class="choices" class:compact role="radiogroup" aria-label={label}>
+<div class="choices {look}" class:compact role="radiogroup" aria-label={label} bind:this={group} tabindex="-1" onkeydown={onkey}>
   {#each options as option (option.value)}
-    <label class="choice" class:selected={value === option.value}>
-      <input type="radio" class="visually-hidden" {name} value={option.value} checked={value === option.value}
-        onchange={() => choose(option.value)} />
-      <span class="head"><span class="dot" aria-hidden="true"></span><strong>{option.title}</strong></span>
-      {#if option.text}<span class="hint">{option.text}</span>{/if}
-    </label>
+    {@const selected = option.value === value}
+    <button type="button" role="radio" aria-checked={selected} tabindex={selected || (!current && option === options[0]) ? 0 : -1}
+      class:selected onclick={() => choose(option.value)}>
+      {#if look === "rows"}
+        <span class="dot" aria-hidden="true"></span>
+        <span class="body">
+          <span class="title">{option.title}</span>
+          {#if option.text}<span class="text">{option.text}</span>{/if}
+        </span>
+        {#if option.aside}<span class="aside">{option.aside}</span>{/if}
+      {:else}
+        {option.title}
+      {/if}
+    </button>
   {/each}
 </div>
+{#if look === "tabs" && current?.text}<p class="about">{current.text}</p>{/if}
 
 <style>
-  .choices { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 12px; }
-  .compact { grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 8px; }
-  .choice {
-    position: relative;
+  .choices { display: flex; outline: none; }
+  button { font: inherit; cursor: pointer; text-align: left; background: transparent; }
+
+  /* Light: underlined segments. */
+  .tabs { flex-wrap: wrap; border-bottom: 1px solid var(--tab-line); }
+  .tabs button {
+    height: 48px;
+    padding: 0 20px;
+    border: none;
+    border-bottom: 2px solid transparent;
+    margin-bottom: -1px;
+    color: var(--muted);
+    font-size: 16px;
+  }
+  .tabs button:first-child { padding-left: 2px; }
+  .tabs button.selected { border-bottom-color: var(--fg); color: var(--fg); font-weight: 600; }
+  .tabs button:hover:not(.selected) { color: var(--fg); }
+  .tabs button:focus-visible { outline-offset: -2px; }
+  .about { margin: 6px 0 0; font-size: 13px; line-height: 1.7; color: var(--label); }
+
+  /* Dark: full rows, the selected one marked by the accent dot and a brighter rule. */
+  .rows { flex-direction: column; }
+  .rows button {
     display: flex;
-    flex-direction: column;
-    gap: 6px;
-    min-height: 44px;
-    padding: 18px 20px;
-    border: 1px solid var(--card-line);
-    border-radius: 16px;
-    background: var(--card);
-    cursor: pointer;
+    align-items: center;
+    gap: 24px;
+    min-height: 104px;
+    padding: 0;
+    border: none;
+    border-top: 1px solid #23252A;
+    color: #A9ABB0;
   }
-  .compact .choice { justify-content: center; padding: 10px 16px; border-radius: 12px; }
-  .choice:hover { border-color: var(--control-line); }
-  .choice.selected { border-color: var(--select); box-shadow: inset 0 0 0 1px var(--select); }
-  .choice:has(input:focus-visible) { outline: 2px solid var(--focus); outline-offset: 2px; }
-  :global(.paper) .choice:has(input:focus-visible) { outline-offset: 0; }
-  .head { display: flex; align-items: center; gap: 10px; }
-  .dot {
-    flex: none;
-    width: 12px;
-    height: 12px;
-    border-radius: 50%;
-    border: 1.5px solid var(--control-line);
-  }
-  .selected .dot { border-color: var(--select); background: var(--select); box-shadow: inset 0 0 0 2px var(--bg); }
-  strong { font-weight: 500; color: var(--fg); }
+  .rows button:last-child { border-bottom: 1px solid #23252A; }
+  .rows button.selected { border-top-color: #34363B; color: #FFFFFF; }
+  .dot { flex: none; width: 10px; height: 10px; box-sizing: border-box; border-radius: 50%; border: 1px solid #5E6067; }
+  .selected .dot { border: none; background: var(--accent); }
+  .body { flex: 1; display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+  .title { font-size: 26px; font-weight: 300; line-height: normal; }
+  .selected .title { font-weight: 400; }
+  .text { font-size: 14px; line-height: normal; color: #8E9096; }
+  .selected .text { color: #A9ABB0; }
+  .aside { flex: none; font-family: "Geist Mono", monospace; font-size: 12px; color: #8E9096; }
+  .selected .aside { color: var(--accent); }
+  .rows button:hover:not(.selected) .title { color: #ECEAE4; }
+  .rows button:focus-visible { outline-offset: -2px; }
+  .rows.compact button { min-height: 64px; }
+  .rows.compact .title { font-size: 20px; }
 </style>

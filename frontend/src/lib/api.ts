@@ -1,5 +1,6 @@
 import type {
-  AsrModel, Bootstrap, Check, Config, Course, Devices, KeyStatus, Note, Problem, Result, RunRecord, Snapshot, Task,
+  AsrModel, Bootstrap, Check, Config, Course, Devices, KeyStatus, Missing, Note, OpenerKind, Openers, Problem, Result,
+  RunRecord, Snapshot, Task,
 } from "./types";
 
 /** Every failure, including a lost connection, arrives as one of these. */
@@ -58,9 +59,11 @@ export interface ServiceTest { provider?: string; api_base?: string; model?: str
 export const api = {
   bootstrap: () => get<Bootstrap>("/api/bootstrap"),
   saveConfig: (changes: Partial<Config>) =>
-    send<{ config: Config; problems: Problem[]; configured: boolean }>("PUT", "/api/config", changes),
+    send<{ config: Config; problems: Problem[]; configured: boolean; missing: Missing[] }>("PUT", "/api/config", changes),
   saveKey: (kind: "notes" | "asr", value: string) => send<KeyStatus>("PUT", `/api/keys/${kind}`, { value }),
   deleteKey: (kind: "notes" | "asr") => request<KeyStatus>("DELETE", `/api/keys/${kind}`),
+  /** The backend copies the environment value into the key file; no value is sent or returned. */
+  persistKey: (kind: "notes" | "asr") => send<KeyStatus>("POST", `/api/keys/${kind}/persist`),
   testService: (kind: "notes" | "asr", body: ServiceTest) => send<Result>("POST", `/api/test/${kind}`, body),
   courses: () => get<Course[]>("/api/courses"),
   addCourse: (name: string) => send<Course>("POST", "/api/courses", { name }),
@@ -72,11 +75,17 @@ export const api = {
   startRun: (course: string, overrides: Record<string, unknown> = {}) =>
     send<Snapshot>("POST", "/api/runs", { course, overrides }),
   activeRun: () => get<Snapshot | null>("/api/runs/active"),
-  control: (action: "pause" | "resume" | "stop" | "skip-refine") => send<Snapshot>("POST", `/api/runs/active/${action}`),
+  control: (action: "pause" | "resume" | "stop" | "skip-refine" | "discard") =>
+    send<Snapshot>("POST", `/api/runs/active/${action}`),
   runs: () => get<RunRecord[]>("/api/runs"),
   notes: (course: string) => get<Note[]>(`/api/notes?${query({ course })}`),
   noteContent: (path: string) => get<Record<string, string>>(`/api/notes/content?${query({ path })}`),
+  deleteNote: (path: string) => request<{ ok: boolean; trashed: string[] }>("DELETE", `/api/notes?${query({ path })}`),
   open: (path: string, mode: "reveal" | "terminal" | "editor") => send<{ ok: boolean }>("POST", "/api/open", { path, mode }),
+  openers: () => get<Openers>("/api/openers"),
+  /** Launches a table program (or null: automatic) on a target the backend picks; nothing is saved. */
+  tryOpener: (kind: OpenerKind, program: string | null) =>
+    send<{ ok: boolean; program: string | null; argv0: string }>("POST", `/api/openers/${kind}/try`, { program }),
   quit: () => send<{ ok: boolean }>("POST", "/api/quit"),
 };
 

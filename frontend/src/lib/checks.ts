@@ -1,4 +1,4 @@
-import type { Check } from "./types";
+import type { Check, Missing } from "./types";
 
 export type FixTarget = "courses" | "asr" | "refine" | "notes" | "mic";
 
@@ -32,6 +32,25 @@ const SYSTEM_NOTES: Record<string, string> = {
 
 export const TARGET_LABELS: Record<FixTarget, string> = {
   courses: "课程目录", asr: "转录", refine: "课后校正", notes: "笔记服务", mic: "麦克风",
+};
+
+/** The settings sections in page order (design/D-settings.reference.html). */
+export type Section = FixTarget | "open" | "checks";
+export const SECTIONS: { id: Section; label: string }[] = [
+  { id: "courses", label: "课程目录" },
+  { id: "asr", label: "转录" },
+  { id: "refine", label: "课后校正" },
+  { id: "notes", label: "笔记服务" },
+  { id: "mic", label: "麦克风" },
+  { id: "open", label: "打开方式" },
+  { id: "checks", label: "环境检查" },
+];
+
+/** What each missing item is called on home and in the start dialog, and where it is set. */
+export const MISSING: Record<Missing, { label: string; section: FixTarget }> = {
+  courses_dir: { label: "课程目录", section: "courses" },
+  notes_key: { label: "笔记服务的 key", section: "notes" },
+  asr_key: { label: "云端转录的 key", section: "asr" },
 };
 
 export type Fix = { target: FixTarget } | { note: string } | null;

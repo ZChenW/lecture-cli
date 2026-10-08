@@ -15,10 +15,18 @@ describe("snapshot view mapping", () => {
     const asr = {
       status: "", device_label: null, model: null, level: 0, backlog_seconds: 0, queued_seconds: 0,
       error: "麦克风不可用",
-      notices: [{ kind: "gain", text: "削波" }, { kind: "warning", text: "麦克风不可用" }, { kind: "device", text: "" }],
+      notices: [{ kind: "device", text: "使用 CPU" }, { kind: "warning", text: "麦克风不可用" }, { kind: "device", text: "" }],
     };
-    expect(bannerItems(asr)).toEqual([{ kind: "error", text: "麦克风不可用" }, { kind: "gain", text: "削波" }]);
+    expect(bannerItems(asr)).toEqual([{ kind: "error", text: "麦克风不可用" }, { kind: "device", text: "使用 CPU" }]);
     expect(bannerItems({ ...asr, error: null, notices: [] })).toEqual([]);
+  });
+
+  it("keeps the mic volume notice out of the banners unless the microphone needs a hand", () => {
+    const asr = { status: "", device_label: null, model: null, level: 0, backlog_seconds: 0, queued_seconds: 0, error: null };
+    expect(bannerItems({ ...asr, notices: [{ kind: "gain", text: "80% · 自动降低削波音量已启用" }] })).toEqual([]);
+    expect(bannerItems({ ...asr, notices: [{ kind: "gain", text: "检测到削波，麦克风音量 80% → 63%" }] })).toEqual([]);
+    const muted = { kind: "gain", text: "默认麦克风已静音；请手动取消静音，自动调节不会取消静音。" };
+    expect(bannerItems({ ...asr, notices: [muted] })).toEqual([muted]);
   });
 
   it("formats note times from file names", () => {

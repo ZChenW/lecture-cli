@@ -28,6 +28,9 @@
   let panelTitle = $state<HTMLElement>();
   let panelBox = $state<HTMLElement>();
   let trigger: HTMLElement | null = null;
+  let menuOpen = $state(false);
+  let menuBox = $state<HTMLElement>();
+  let menuButton = $state<HTMLButtonElement>();
 
   let note = $derived(content ? parseNote(content.main, course) : null);
   let transcript = $derived(content?.transcript ? parseTranscript(content.transcript) : null);
@@ -39,6 +42,11 @@
     try {
       content = await api.noteContent(path);
       error = "";
+      // Home's "N 处待核对" opens the note with the review panel showing.
+      if (app.panel === "review" && content.review) {
+        app.panel = null;
+        tick().then(() => showPanel("review", null));
+      }
     } catch (e) {
       // A refresh that fails keeps showing the last good copy.
       if (!content) error = message(e);
@@ -139,12 +147,49 @@
     current = id;
   }
 
-  async function openElsewhere() {
+  const OPEN_ITEMS = [
+    { mode: "reveal", label: "在文件管理器中显示" },
+    { mode: "terminal", label: "在终端中打开" },
+    { mode: "editor", label: "用编辑器打开" },
+  ] as const;
+
+  async function toggleMenu() {
+    menuOpen = !menuOpen;
+    if (menuOpen) {
+      await tick();
+      menuBox?.querySelector<HTMLElement>('[role="menuitem"]')?.focus();
+    }
+  }
+
+  function closeMenu(refocus = true) {
+    menuOpen = false;
+    if (refocus) menuButton?.focus();
+  }
+
+  async function openWith(mode: "reveal" | "terminal" | "editor") {
+    closeMenu();
     openError = "";
     try {
-      await api.open(path, "editor");
+      await api.open(path, mode);
     } catch (e) {
       openError = message(e);
+    }
+  }
+
+  // A menu button pattern: arrows move between the items, Esc closes and returns to the button.
+  function menuKey(event: KeyboardEvent) {
+    const items = [...(menuBox?.querySelectorAll<HTMLElement>('[role="menuitem"]') ?? [])];
+    const index = items.indexOf(document.activeElement as HTMLElement);
+    const go = { ArrowDown: index + 1, ArrowUp: index - 1, Home: 0, End: items.length - 1 }[event.key];
+    if (go != null) {
+      event.preventDefault();
+      items[(go + items.length) % items.length]?.focus();
+    } else if (event.key === "Escape") {
+      event.preventDefault();
+      event.stopPropagation();
+      closeMenu();
+    } else if (event.key === "Tab") {
+      closeMenu(false);
     }
   }
 
@@ -157,6 +202,7 @@
 </script>
 
 <svelte:window onscroll={onscroll} onresize={onscroll} onkeydown={onkey} />
+<svelte:document onpointerdown={(event) => menuOpen && menuBox && !menuBox.parentElement?.contains(event.target as Node) && closeMenu(false)} />
 
 <div class="reader">
   <header class="bar">
@@ -173,7 +219,17 @@
         <button type="button" class="text-btn" aria-expanded={panel === "review"} aria-controls="reader-panel"
           onclick={(event) => toggle("review", event)}>待核对</button>
       {/if}
-      <button type="button" class="text-btn" onclick={openElsewhere}>用其他应用打开</button>
+      <div class="open-menu">
+        <button type="button" class="text-btn" bind:this={menuButton} aria-haspopup="menu" aria-expanded={menuOpen}
+          aria-controls={menuOpen ? "open-menu" : undefined} onclick={toggleMenu}>打开…</button>
+        {#if menuOpen}
+          <div class="menu" id="open-menu" role="menu" aria-label="打开" tabindex="-1" bind:this={menuBox} onkeydown={menuKey}>
+            {#each OPEN_ITEMS as item (item.mode)}
+              <button type="button" role="menuitem" tabindex="-1" onclick={() => openWith(item.mode)}>{item.label}</button>
+            {/each}
+          </div>
+        {/if}
+      </div>
     </div>
   </header>
 
@@ -217,6 +273,7 @@
     </div>
     <div class="panel-body" bind:this={panelBody}>
       {#if shown === "review"}
+        <p class="review-about">以下是模型没有把握的地方。请对照课件或录音确认；程序不会自动修改它们。</p>
         <div class="prose small" bind:this={reviewBox}>{@html review}</div>
       {:else if transcript}
         {#if !found && target}<p class="missing">转录里没有 L{target.first}{target.last > target.first ? `–L${target.last}` : ""}（{target.version}）对应的片段</p>{/if}
@@ -263,7 +320,6 @@
     min-height: 44px;
     padding: 0 12px;
     border: 0;
-    border-radius: 6px;
     background: none;
     font-size: 14px;
     color: #5C5C5A;
@@ -275,6 +331,35 @@
     text-decoration-thickness: 1px;
     text-underline-offset: 6px;
   }
+  /* The light dropdown surface of plan N2.1. */
+  .open-menu { position: relative; }
+  .menu {
+    position: absolute;
+    right: 0;
+    top: calc(100% + 6px);
+    z-index: 4;
+    min-width: 220px;
+    padding: 6px 0;
+    display: flex;
+    flex-direction: column;
+    background: #FFFFFF;
+    border: 1px solid #111111;
+    box-shadow: 0 12px 32px rgba(17, 17, 17, 0.10);
+    outline: none;
+  }
+  .menu button {
+    min-height: 44px;
+    padding: 0 14px;
+    border: 0;
+    background: transparent;
+    font-size: 15px;
+    text-align: left;
+    white-space: nowrap;
+    color: #111111;
+    cursor: pointer;
+  }
+  .menu button:hover, .menu button:focus-visible { background: #F1F1EE; outline: none; }
+  .review-about { margin: 16px 0 8px; font-size: 13px; line-height: 1.7; color: #5C5C5A; }
 
   .layout {
     display: grid;
@@ -328,7 +413,7 @@
   .prose :global(li + li), .prose :global(li > :is(ul, ol)) { margin-top: 6px; }
   .prose :global(blockquote) { margin-left: 0; margin-right: 0; padding-left: 18px; border-left: 1px solid #D9D9D6; color: #5C5C5A; }
   .prose :global(code) { font-family: var(--mono); font-size: 0.85em; }
-  .prose :global(pre) { overflow-x: auto; padding: 14px 16px; border: 1px solid #D9D9D6; border-radius: 6px; font-size: 14px; line-height: 1.6; }
+  .prose :global(pre) { overflow-x: auto; padding: 14px 16px; border: 1px solid #D9D9D6; font-size: 14px; line-height: 1.6; }
   .prose :global(table) { display: block; max-width: 100%; overflow-x: auto; border-collapse: collapse; font-size: 15px; line-height: 1.6; }
   .prose :global(:is(th, td)) { padding: 8px 12px; border-bottom: 1px solid #D9D9D6; text-align: left; vertical-align: top; }
   .prose :global(hr) { border: 0; border-top: 1px solid #D9D9D6; }
@@ -347,7 +432,6 @@
     margin-left: 8px;
     padding: 0 6px;
     border: 1px solid #D9D9D6;
-    border-radius: 4px;
     font-family: var(--ui);
     font-size: 12px;
     line-height: 1.7;

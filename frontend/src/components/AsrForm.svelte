@@ -1,15 +1,20 @@
 <script lang="ts">
   import { api } from "../lib/api";
+  import type { ListOption } from "../lib/listbox";
   import { app, message } from "../lib/state.svelte";
   import type { AsrModel, Result } from "../lib/types";
   import Choices from "./Choices.svelte";
   import KeyField from "./KeyField.svelte";
   import ModelDownload from "./ModelDownload.svelte";
+  import Select from "./Select.svelte";
   import ServiceTest from "./ServiceTest.svelte";
 
-  // gpu: the wizard's GPU detection (null while unknown); settings shows language and device too.
-  let { ready = $bindable(false), gpu = undefined, settings = false }:
-    { ready?: boolean; gpu?: boolean | null; settings?: boolean } = $props();
+  // look: "tabs" in settings (design D), "rows" in the wizard (design E). gpu: the wizard's GPU
+  // detection (null while unknown); preselect: let it choose the mode while the choice is still the
+  // default one. Settings also offers the recognition device.
+  let { ready = $bindable(false), gpu = undefined, preselect = false, settings = false, look = "tabs" }: {
+    ready?: boolean; gpu?: boolean | null; preselect?: boolean; settings?: boolean; look?: "tabs" | "rows";
+  } = $props();
 
   const boot = app.boot!;
   const config = boot.config;
@@ -29,21 +34,24 @@
   let key = $state("");
   let keyStatus = $state(boot.keys.asr);
   let tested = $state<(Result & { signature: string }) | null>(null);
+  let testing = $state(false);
   let keyField = $state<KeyField>();
+  let tester = $state<ServiceTest>();
   let error = $state("");
+  let uid = $derived(look);
 
   let signature = $derived(JSON.stringify([apiBase, apiModel, key, keyStatus.set]));
   let selected = $derived(models.find((m) => m.name === (mode === "qwen" ? qwenModel : whisperModel)));
-  let suggestion = $derived(gpu === undefined || gpu === null ? "" :
-    gpu ? "检测到 NVIDIA GPU，已预选本地转录。" : "未检测到 NVIDIA GPU，已预选云端 API。");
+  let qwenReady = $derived(models.some((m) => m.family === "qwen" && m.env_ready));
 
   $effect(() => {
-    if (gpu !== undefined && gpu !== null && !touched) mode = gpu ? "whisper" : "api";
+    if (preselect && gpu !== undefined && gpu !== null && !touched) mode = gpu ? "whisper" : "api";
   });
   $effect(() => {
     ready = mode === "api" ? tested?.signature === signature && tested.level !== "fail"
       : !!selected && selected.cached && selected.env_ready;
   });
+  $effect(() => { if (mode === "qwen" && language === "auto") language = "zh"; });
 
   async function loadModels() {
     try {
@@ -67,7 +75,7 @@
     error = "";
     try {
       if (mode === "api" && !(await keyField!.save())) return false;
-      const extras = settings ? { language, asr_device: device } : {};
+      const extras = settings ? { language, asr_device: device } : { language };
       await api.saveConfig(mode === "api"
         ? { asr_backend: "api", asr_provider: provider, asr_api_base: apiBase.trim(), asr_api_model: apiModel.trim(), ...extras }
         : { asr_backend: "local", asr_model: mode === "qwen" ? qwenModel : whisperModel, ...extras });
@@ -77,87 +85,96 @@
       return false;
     }
   }
+
+  const modes = $derived(look === "rows" ? [
+    { value: "whisper", title: "本地 Whisper", text: "在本机转录，音频不离开电脑",
+      aside: gpu == null ? "" : gpu ? "已检测到 NVIDIA GPU" : "未检测到 NVIDIA GPU" },
+    { value: "qwen", title: "本地 Qwen", text: "中文课堂更准，需要另装运行环境", aside: models.length ? qwenReady ? "已安装" : "未安装" : "" },
+    { value: "api", title: "云端 API", text: "没有显卡时用，音频会上传到转录服务", aside: keyStatus.set ? "已有 key" : "需要 key" },
+  ] : [
+    { value: "whisper", title: "本地 Whisper", text: "在本机转录，有 NVIDIA GPU 时更快。中文课堂建议改用本地 Qwen。" },
+    { value: "qwen", title: "本地 Qwen", text: "中文课堂更准，需要另装运行环境。" },
+    { value: "api", title: "云端 API", text: "没有显卡时用，音频会上传到 OpenAI 兼容的转录服务，需要 key。" },
+  ]);
+  const modelOptions = $derived<ListOption[]>((mode === "qwen" ? models.filter((m) => m.family === "qwen")
+    : models.filter((m) => m.family === "whisper")).map((m) => ({ value: m.name, label: m.name })));
+  const languages = $derived<ListOption[]>([
+    { value: "en", label: "英语", code: "en" },
+    { value: "zh", label: "中文", code: "zh" },
+    { value: "auto", label: "自动识别", code: "auto", disabled: mode === "qwen" },
+    ...(["en", "zh", "auto"].includes(language) ? [] : [{ value: language, label: language }]),
+  ]);
+  const devices: ListOption[] = [
+    { value: "auto", label: "自动（优先 GPU）" }, { value: "cuda", label: "NVIDIA GPU" }, { value: "cpu", label: "CPU" },
+  ];
 </script>
 
-<div class="stack">
-  <Choices name="asr-mode" label="转录方式" bind:value={mode} onchange={() => (touched = true)} options={[
-    { value: "whisper", title: "本地 Whisper", text: "在本机转录，音频不离开电脑；有 NVIDIA GPU 时更快。" },
-    { value: "qwen", title: "本地 Qwen", text: "本机 Qwen3-ASR，需要单独安装的 Qwen 运行环境。" },
-    { value: "api", title: "云端 API", text: "把音频发送到 OpenAI 兼容的转录服务，需要 key。" },
-  ]} />
-  {#if suggestion && !touched}<p class="hint">{suggestion}</p>{/if}
+<div class="form {look}">
+  <div class="field">
+    {#if look === "tabs"}<span class="label">方式</span>{/if}
+    <Choices {look} label="转录方式" bind:value={mode} onchange={() => (touched = true)} options={modes} />
+  </div>
 
-  {#if mode === "whisper"}
-    <label class="field">
-      <span>语音模型</span>
-      <select class="input" bind:value={whisperModel}>
-        {#each models.filter((m) => m.family === "whisper") as model}
-          <option value={model.name}>{model.name}{model.cached ? "" : "（未下载）"}</option>
-        {/each}
-      </select>
-    </label>
-    {#if selected && !selected.env_ready}
-      <p class="error-text">本地转录依赖未安装，请在项目目录运行 ./install.sh。</p>
-    {:else if selected}
-      <ModelDownload name={selected.name} cached={selected.cached} ondone={loadModels} />
-    {/if}
-  {:else if mode === "qwen"}
-    {#if qwenNames.length && !models.some((m) => m.family === "qwen" && m.env_ready)}
-      <p class="warn-text">需要 Qwen 运行环境：在项目目录运行 <code class="mono">./install-qwen.sh</code>，完成后回到此页。</p>
-    {/if}
-    <label class="field">
-      <span>语音模型</span>
-      <select class="input" bind:value={qwenModel}>
-        {#each qwenNames as name}<option value={name}>{name}</option>{/each}
-      </select>
-    </label>
-    {#if selected?.env_ready}
-      <ModelDownload name={selected.name} cached={selected.cached} ondone={loadModels} />
-    {/if}
-  {:else}
-    <div class="field">
-      <span>服务</span>
-      <Choices name="asr-preset" label="转录服务" compact bind:value={provider} onchange={choosePreset}
-        options={Object.entries(presets).map(([id, preset]) => ({ value: id, title: preset.label }))} />
+  {#if mode === "api"}
+    <div class="field api-field">
+      <span class="label">服务</span>
+      <Choices label="转录服务" bind:value={provider} onchange={choosePreset}
+        options={Object.entries(presets).map(([id, preset]) => ({ value: id, title: preset.label.replace(/（.*）$/, "") }))} />
     </div>
-    <label class="field">
-      <span>服务地址</span>
-      <input class="input mono" bind:value={apiBase} placeholder="https://…/v1" spellcheck="false" />
-    </label>
-    <label class="field">
-      <span>模型</span>
-      <input class="input mono" bind:value={apiModel} spellcheck="false" />
-    </label>
-    <KeyField kind="asr" bind:status={keyStatus} bind:value={key} bind:this={keyField} />
-    <ServiceTest kind="asr" {provider} {apiBase} model={apiModel} {key} {signature} bind:result={tested} />
-  {/if}
-
-  {#if settings}
-    <div class="row">
+    <div class="grid">
       <label class="field">
-        <span>课堂语言</span>
-        <select class="input" bind:value={language}>
-          <option value="en">英语 en</option>
-          <option value="zh">中文 zh</option>
-          <option value="auto" disabled={mode === "qwen"}>自动识别 auto</option>
-          {#if !["en", "zh", "auto"].includes(language)}<option value={language}>{language}</option>{/if}
-        </select>
+        <span>服务地址</span>
+        <input class="input mono" bind:value={apiBase} placeholder="https://…/v1" spellcheck="false" />
       </label>
-      {#if mode !== "api"}
-        <label class="field">
-          <span>识别设备</span>
-          <select class="input" bind:value={device}>
-            <option value="auto">自动（优先 GPU）</option>
-            <option value="cuda">NVIDIA GPU</option>
-            <option value="cpu">CPU</option>
-          </select>
-        </label>
-      {/if}
+      <label class="field">
+        <span>模型</span>
+        <input class="input mono" bind:value={apiModel} spellcheck="false" />
+      </label>
     </div>
+    <KeyField kind="asr" bind:status={keyStatus} bind:value={key} bind:this={keyField} {testing} ontest={() => tester?.run()} />
+    <ServiceTest bind:this={tester} kind="asr" {provider} {apiBase} model={apiModel} {key} {signature} bind:result={tested} bind:busy={testing} />
   {/if}
+
+  <div class="grid">
+    {#if mode !== "api"}
+      <div class="field">
+        <span id="{uid}-asr-model">语音模型</span>
+        {#if modelOptions.length}
+          <Select labelledby="{uid}-asr-model" mono options={modelOptions}
+            bind:value={() => (mode === "qwen" ? qwenModel : whisperModel), (v) => (mode === "qwen" ? (qwenModel = v) : (whisperModel = v))} />
+        {:else}
+          <span class="input placeholder">正在读取…</span>
+        {/if}
+        {#if selected && !selected.env_ready}
+          <span class="field-note warn-text">{mode === "qwen" ? "本地 Qwen 运行环境未安装，暂时不能使用" : "本地转录组件未安装，暂时不能使用"}</span>
+        {:else if selected}
+          <ModelDownload name={selected.name} cached={selected.cached} ondone={loadModels} />
+        {/if}
+      </div>
+    {/if}
+    <div class="field">
+      <span id="{uid}-asr-lang">默认课堂语言</span>
+      <Select labelledby="{uid}-asr-lang" options={languages} bind:value={language} />
+      <span class="field-note">{look === "rows" ? "开始上课时可以单独更改" : "每门课可在开始上课时单独更改"}</span>
+    </div>
+    {#if settings && mode !== "api"}
+      <div class="field">
+        <span id="{uid}-asr-device">识别设备</span>
+        <Select labelledby="{uid}-asr-device" options={devices} bind:value={device} />
+      </div>
+    {/if}
+  </div>
   {#if error}<p class="error-text" role="alert">{error}</p>{/if}
 </div>
 
 <style>
-  .row .field { flex: 1 1 200px; }
+  .form { display: flex; flex-direction: column; gap: 28px; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(220px, 100%), 1fr)); gap: 28px 32px; }
+  /* Wizard: rows, then the field grid 40px below (design E). */
+  .rows { gap: 0; }
+  .rows .grid { grid-template-columns: repeat(auto-fit, minmax(min(240px, 100%), 1fr)); gap: 24px 40px; padding-top: 40px; }
+  .rows .api-field { padding-top: 40px; }
+  .rows > :global(.key-field) { padding-top: 24px; }
+  .placeholder { display: flex; align-items: center; color: var(--faint); }
+  .warn-text.field-note { color: var(--warn); }
 </style>

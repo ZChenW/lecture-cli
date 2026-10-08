@@ -100,7 +100,9 @@ export function closingStages(snapshot: Snapshot, drainStart: number | null): Cl
   const rows: Record<string, Omit<ClosingStage, "key" | "state">> = {
     draining: { label: "完成末尾转录", status: snapshot.asr.status, progress: null,
       seconds: drainStart != null && drainEnd != null ? drainEnd - drainStart : null },
-    refining: { label: "课后离线校正", status: snapshot.refine.status ?? "", progress: null, seconds: span("离线校正") },
+    // Plan N2.5: a bar and the time left; until the controller has a rate the time reads "正在估算".
+    refining: { label: "课后离线校正", status: refineEta(snapshot.refine.eta_seconds), seconds: span("离线校正"),
+      progress: { done: Math.round(Math.min(1, Math.max(0, snapshot.refine.progress ?? 0)) * 100), total: 100 } },
     finalizing: { label: "编写详细笔记", status: chapterStatus(snapshot.notes.status),
       progress: progressOf(snapshot.notes.status), seconds: span("课后笔记") },
     saving: { label: "保存", status: "正在写入笔记文件", progress: null, seconds: null },
@@ -109,6 +111,33 @@ export function closingStages(snapshot: Snapshot, drainStart: number | null): Cl
     key, ...rows[key],
     state: index < current ? "done" : index === current ? "current" : "pending",
   }));
+}
+
+/** "约剩 N 分钟" for the refine stage; null (no rate yet) reads "正在估算". */
+export function refineEta(seconds: number | null | undefined): string {
+  if (seconds == null) return "正在估算";
+  return seconds < 60 ? "约剩不到一分钟" : `约剩 ${Math.round(seconds / 60)} 分钟`;
+}
+
+/** Shown above the armed 下课 button: how long the notes take after the lecture ends. */
+export function closingHint(seconds: number | null | undefined): string {
+  if (seconds == null) return "";
+  return seconds < 60 ? "下课后还需不到一分钟整理" : `下课后还需约 ${Math.round(seconds / 60)} 分钟整理`;
+}
+
+export interface GainState { cell: string; detail: string; warn: boolean }
+
+/**
+ * The automatic mic volume notice (lecture_cli/mic_gain.py) belongs in the mic cell, not a banner:
+ * "自动调节开" while it works, "自动调节关" when it could not start. Only a muted microphone or one
+ * already at the volume floor is a warning.
+ */
+export function gainState(asr: Snapshot["asr"]): GainState | null {
+  const text = asr.notices.find((notice) => notice.kind === "gain")?.text ?? "";
+  if (!text) return null;
+  if (/静音|下限/.test(text)) return { cell: "自动调节开", detail: text, warn: true };
+  if (/未启用|失败|无法读取|已停止/.test(text)) return { cell: "自动调节关", detail: text, warn: false };
+  return { cell: "自动调节开", detail: text, warn: false };
 }
 
 /** The left column's line under the date: a future tense until the file is really written. */

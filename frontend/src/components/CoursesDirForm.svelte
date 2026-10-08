@@ -3,8 +3,8 @@
   import { app, message, refresh } from "../lib/state.svelte";
   import type { Course } from "../lib/types";
 
-  // Settings saves through its section button, so the inline check button is the wizard's alone.
-  let { ready = $bindable(false), checkButton = true }: { ready?: boolean; checkButton?: boolean } = $props();
+  // Settings saves through its section button; the wizard saves on "下一步".
+  let { ready = $bindable(false) }: { ready?: boolean } = $props();
   let path = $state(app.boot?.config.courses_dir ?? "");
   let saved = $state(app.boot?.config.courses_dir ?? "");
   let courses = $state<Course[] | null>(null);
@@ -53,31 +53,31 @@
   }
 </script>
 
-<div class="stack">
+<div class="form">
   <div class="field">
-    <label for="courses-dir">课程目录</label>
-    <div class="row">
-      <input id="courses-dir" class="input grow" bind:value={path} placeholder="/home/你/Courses" spellcheck="false"
-        onkeydown={(e) => e.key === "Enter" && save()} />
-      {#if checkButton}<button type="button" class="btn" onclick={save}>检查并保存</button>{/if}
-    </div>
+    <label for="courses-dir">位置</label>
+    <input id="courses-dir" class="input path" bind:value={path} placeholder="/home/你/Courses" spellcheck="false"
+      onkeydown={(e) => e.key === "Enter" && save()} />
   </div>
-  <p class="hint">每个子文件夹是一门课，笔记保存到 子文件夹/LectureNotes。</p>
   {#if error}<p class="error-text" role="alert">{error}</p>{/if}
   {#if courses && path.trim() === saved}
-    <p class="ok-text" role="status">检测到 {courses.length} 门课程{courses.length ? `：${courses.map((c) => c.name).join("、")}` : ""}</p>
-    <form class="row" onsubmit={create}>
-      <label class="field grow">
-        <span>{courses.length ? "新建课程" : "新建第一门课"}</span>
-        <input class="input" bind:value={newCourse} placeholder="例如 MATH421" />
-      </label>
-      <button type="submit" class="btn align-end" disabled={!newCourse.trim()}>新建</button>
+    <p class="status" role="status">已找到 {courses.length} 门课程</p>
+    <form class="field" data-own-save onsubmit={create}>
+      <label for="new-course">{courses.length ? "新建课程" : "新建第一门课"}</label>
+      <div class="line">
+        <input id="new-course" class="input" bind:value={newCourse} placeholder="例如 MATH421" />
+        <button type="submit" class="text-action" disabled={!newCourse.trim()}>新建</button>
+      </div>
     </form>
     {#if courseError}<p class="error-text" role="alert">{courseError}</p>{/if}
+  {:else if !saved}
+    <p class="status">填写一个文件夹，它的每个子文件夹是一门课。</p>
   {/if}
 </div>
 
 <style>
-  .grow { flex: 1 1 260px; min-width: 0; }
-  .align-end { align-self: flex-end; }
+  .form { display: flex; flex-direction: column; gap: 18px; }
+  .path { font-family: var(--mono); color: var(--fg); }
+  .status { margin: 0; font-size: 13px; color: var(--label); }
+  .line { display: flex; align-items: center; gap: 12px; max-width: 420px; }
 </style>

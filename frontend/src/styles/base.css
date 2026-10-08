@@ -19,8 +19,15 @@
   --accent: #d4ff5c;
   --select: #d4ff5c;
   --focus: #d4ff5c;
-  --chevron: url("./select-night.svg");
   --primary: #d4ff5c;
+  /* Fields and the custom dropdown (design/E-wizard.reference.html; list colours from plan N2.1). */
+  --field-line: #5e6067;
+  --label: #8e9096;
+  --tab-line: #23252a;
+  --dd-bg: #15171a;
+  --dd-border: #34363b;
+  --dd-hover: #23252a;
+  --dd-shadow: 0 12px 32px rgba(0, 0, 0, 0.45);
   --on-primary: #0b0c0e;
   --warn: #ffb454;
   --error: #ff6b5e;
@@ -48,8 +55,15 @@
   --select: #111111;
   /* Ink, not the accent: a red ring around a field reads as an error. */
   --focus: #111111;
-  --chevron: url("./select-paper.svg");
   --primary: #111111;
+  /* Fields and the custom dropdown (design/D-settings.reference.html). */
+  --field-line: #111111;
+  --label: #5c5c5a;
+  --tab-line: #d9d9d6;
+  --dd-bg: #ffffff;
+  --dd-border: #111111;
+  --dd-hover: #f1f1ee;
+  --dd-shadow: 0 12px 32px rgba(17, 17, 17, 0.10);
   --on-primary: #fbfbfa;
   /* Darker than the accent so warnings never read as a third accent use (both ≥ 6:1 on --bg). */
   --warn: #8a5300;
@@ -81,7 +95,7 @@ a { color: inherit; }
 .paper a:hover { color: var(--accent); }
 :focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
 /* On bordered controls the ring joins the border, so it reads as one solid line, not two. */
-.paper :is(.btn, .input):focus-visible { outline-offset: 0; }
+.paper .btn:focus-visible { outline-offset: 0; }
 
 .btn {
   min-height: 44px;
@@ -113,36 +127,47 @@ a { color: inherit; }
   text-decoration: underline;
   text-underline-offset: 3px;
 }
-
-.field { display: flex; flex-direction: column; gap: 6px; }
-.field > span, .field > label, .label {
-  font-size: 12px;
-  letter-spacing: 0.08em;
-  color: var(--faint);
-}
-/* Wide tracking reads well only on Latin letters; Chinese labels keep 0.08em. */
-.night .latin { letter-spacing: 0.24em; }
-.paper .latin { letter-spacing: 0.12em; }
-.input {
-  min-height: 44px;
-  padding: 0 14px;
-  border: 1px solid var(--control-line);
-  border-radius: 10px;
-  background: var(--field);
-  width: 100%;
-}
-.input:disabled { opacity: 0.6; }
-/* Native arrows differ per platform and ignore the theme; a bundled chevron matches the inputs. */
-select.input {
-  appearance: none;
-  padding-right: 40px;
-  background-image: var(--chevron);
-  background-repeat: no-repeat;
-  background-position: right 14px center;
-  background-size: 12px 12px;
+/* The reference's text actions: "测试连接", "保存到本机", "试一下". */
+.text-action {
+  height: 44px;
+  padding: 0 12px;
+  border: none;
+  background: transparent;
+  color: var(--fg);
+  font-size: 14px;
+  text-decoration: underline;
+  text-underline-offset: 4px;
   cursor: pointer;
+  white-space: nowrap;
 }
-.night select.input option { background: #0b0c0e; color: #eceae4; }
+.text-action:disabled { opacity: 0.5; cursor: progress; }
+
+.field { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+/* Field labels: 13px as in both references; Chinese labels track 0.08em (standing preference),
+   the English-only "API key" keeps the reference's normal spacing. */
+.field > span:not(.field-note), .field > label, .label {
+  font-size: 13px;
+  letter-spacing: 0.08em;
+  color: var(--label);
+}
+.field > .latin, .label.latin { letter-spacing: normal; }
+.field-note { font-size: 12px; color: var(--label); }
+.field-note.long { line-height: 1.7; }
+/* Rule 3: no box, no radius, only an underline that thickens to 2px on focus. */
+.input {
+  height: 44px;
+  padding: 0 2px;
+  border: none;
+  border-bottom: 1px solid var(--field-line);
+  border-radius: 0;
+  background: transparent;
+  font-size: 15px;
+  width: 100%;
+  min-width: 0;
+}
+.input:focus-visible { outline: none; border-bottom-width: 2px; }
+.input::placeholder { color: var(--faint); }
+.input:disabled { opacity: 0.6; }
 .hint { font-size: 13px; color: var(--muted); }
 .error-text { font-size: 13px; color: var(--error); }
 .warn-text { font-size: 13px; color: var(--warn); }
@@ -150,26 +175,38 @@ select.input {
 .mono { font-family: var(--mono); }
 .row { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; }
 .stack { display: flex; flex-direction: column; gap: 16px; }
-.check {
-  display: inline-flex;
-  align-items: center;
-  gap: 10px;
-  min-height: 44px;
-  cursor: pointer;
-}
-.check input { width: 18px; height: 18px; accent-color: var(--primary); }
 pre.log {
   margin: 0;
   max-height: 240px;
   overflow: auto;
   padding: 12px 14px;
   border: 1px solid var(--card-line);
-  border-radius: 10px;
   font-family: var(--mono);
   font-size: 12px;
   white-space: pre-wrap;
   color: var(--muted);
 }
+/* A small tooltip shown on hover and keyboard focus (title attributes do not show on focus). */
+.has-tip { position: relative; }
+.tip {
+  position: absolute;
+  bottom: calc(100% + 8px);
+  right: 0;
+  z-index: 10;
+  padding: 6px 10px;
+  background: var(--fg);
+  color: var(--bg);
+  font-size: 12px;
+  font-weight: 400;
+  line-height: 1.5;
+  letter-spacing: normal;
+  white-space: nowrap;
+  text-decoration: none;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 120ms ease;
+}
+.has-tip:hover > .tip, .has-tip:focus-visible > .tip { opacity: 1; transition-delay: 300ms; }
 .visually-hidden {
   position: absolute;
   width: 1px;

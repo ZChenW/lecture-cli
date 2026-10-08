@@ -25,7 +25,7 @@
       started = true;
     }).catch((e) => {
       failure = e instanceof ApiError && e.status === 401
-        ? { title: "界面会话已失效", text: "请关闭此窗口，在终端重新运行 lecture gui。" }
+        ? { title: "界面会话已失效", text: "请关闭此窗口，从应用菜单重新打开 Lecture。" }
         : { title: "无法载入", text: message(e) };
     });
     return () => window.removeEventListener("hashchange", follow);

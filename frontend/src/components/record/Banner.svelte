@@ -2,63 +2,61 @@
   import { bannerItems } from "../../lib/format";
   import type { Snapshot } from "../../lib/types";
 
+  // Plan N2.5: banners only for warnings and errors. No outline; a dot carries the level and the
+  // text stays in the main colour. Warnings close with the icon button; errors cannot be closed.
   let { asr }: { asr: Snapshot["asr"] } = $props();
-  let collapsed = $state(false);
-  // Dismissed notice texts; an error is never in here, so it can be folded away but not closed (plan 6.2).
   let dismissed = $state<string[]>([]);
   let items = $derived(bannerItems(asr).filter((item) => item.kind === "error" || !dismissed.includes(item.text)));
-  let error = $derived(items.some((item) => item.kind === "error"));
 </script>
 
 {#if items.length}
-  <div class="banner" class:error role={error ? "alert" : "status"}>
-    {#if collapsed}
-      <span class="summary">{error ? "转录出错" : `${items.length} 条提示`}</span>
-    {:else}
-      <ul>
-        {#each items as item (item.text)}<li class={item.kind}>{item.text}</li>{/each}
-      </ul>
-    {/if}
-    <div class="actions">
-      <button class="act" aria-expanded={!collapsed} onclick={() => (collapsed = !collapsed)}>
-        {collapsed ? "展开" : "收起"}
-      </button>
-      {#if !error}
-        <button class="act" onclick={() => (dismissed = [...dismissed, ...items.map((item) => item.text)])}>关闭</button>
-      {/if}
-    </div>
+  <div class="banners">
+    {#each items as item (item.text)}
+      <div class="banner" class:error={item.kind === "error"} role={item.kind === "error" ? "alert" : "status"}>
+        <span class="dot" aria-hidden="true"></span>
+        <span class="visually-hidden">{item.kind === "error" ? "错误：" : "提示："}</span>
+        <p>{item.text}</p>
+        {#if item.kind !== "error"}
+          <button class="close" aria-label="关闭这条提示" title="关闭" onclick={() => (dismissed = [...dismissed, item.text])}>
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"
+              stroke-linecap="round" aria-hidden="true"><path d="M7 7l10 10M17 7L7 17" /></svg>
+          </button>
+        {/if}
+      </div>
+    {/each}
   </div>
 {/if}
 
 <style>
+  .banners { position: relative; display: flex; flex-direction: column; gap: 8px; }
   .banner {
-    position: relative;
     display: flex;
-    align-items: flex-start;
-    justify-content: space-between;
-    gap: 16px;
-    padding: 4px 6px 4px 18px;
-    border: 1px solid rgba(255, 180, 84, 0.35);
-    border-radius: 14px;
-    background: rgba(255, 180, 84, 0.06);
-    color: #FFB454;
+    align-items: center;
+    gap: 12px;
+    min-height: 44px;
+    padding: 0 4px 0 16px;
+    border-radius: 10px;
+    background: rgba(255, 255, 255, 0.04);
+    color: #ECEAE4;
     font-size: 13px;
     line-height: 1.6;
   }
-  .banner.error { border-color: rgba(255, 107, 94, 0.45); background: rgba(255, 107, 94, 0.07); color: #FF8A7E; }
-  ul { margin: 0; padding: 8px 0; list-style: none; display: flex; flex-direction: column; gap: 4px; min-width: 0; }
-  li.error { color: #FF8A7E; }
-  .summary { padding-block: 10px; }
-  .actions { display: flex; gap: 4px; flex: none; }
-  .act {
-    min-height: 44px;
-    padding: 0 12px;
+  .banner.error { padding-right: 16px; }
+  .dot { flex: none; width: 6px; height: 6px; border-radius: 50%; background: #FFB454; }
+  .error .dot { background: #FF6B5E; }
+  p { flex: 1; margin: 0; padding: 11px 0; min-width: 0; overflow-wrap: anywhere; }
+  .close {
+    flex: none;
+    width: 44px;
+    height: 44px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
     border: 0;
-    border-radius: 999px;
+    border-radius: 50%;
     background: transparent;
-    color: #ECEAE4;
-    font-size: 13px;
+    color: #A9ABB0;
     cursor: pointer;
   }
-  .act:hover { background: rgba(255, 255, 255, 0.06); }
+  .close:hover { color: #ECEAE4; background: rgba(255, 255, 255, 0.06); }
 </style>

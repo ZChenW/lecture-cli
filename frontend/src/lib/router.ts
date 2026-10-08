@@ -18,11 +18,16 @@ export function navigate(name: RouteName, ...params: string[]): void {
   location.hash = routeHash(name, ...params);
 }
 
-/** Where the app opens: a running lecture wins, then an unfinished setup, otherwise the requested page. */
-export function startRoute(boot: { active_run: unknown; configured: boolean }, hash: string): string {
+/**
+ * Where the app opens: a running lecture wins; a first start that was neither finished nor skipped
+ * goes to the wizard. Home is not gated on a complete setup (plan N2.4): it says what is missing.
+ */
+export function startRoute(boot: { active_run: unknown; configured: boolean; config?: { onboarded?: unknown } },
+  hash: string): string {
   const route = parseRoute(hash);
   if (boot.active_run) return routeHash("record");
-  if (!boot.configured && route.name !== "onboarding" && route.name !== "settings") return routeHash("onboarding");
-  if (boot.configured && (route.name === "onboarding" || route.name === "record")) return routeHash("home");
+  const fresh = !boot.configured && !boot.config?.onboarded;
+  if (fresh && route.name !== "onboarding" && route.name !== "settings") return routeHash("onboarding");
+  if (route.name === "record") return routeHash("home");
   return hash || routeHash("home");
 }

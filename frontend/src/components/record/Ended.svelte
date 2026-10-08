@@ -14,11 +14,15 @@
   $effect(() => {
     if (log) log.scrollTop = log.scrollHeight;
   });
+  // A discarded run never reaches this page (Record goes home), so it is never shown as failed.
   type Kind = "done" | "unsaved" | "failed";
   let kind = $derived<Kind>(record.status === "done" || record.status === "unsaved" ? record.status : "failed");
   const STATES: Record<Kind, string> = { done: "已保存", unsaved: "尚未保存", failed: "异常结束" };
   const TITLES: Record<Kind, string> = { done: "笔记已保存", unsaved: "笔记尚未成功保存", failed: "课堂异常结束" };
   let file = $derived(record.output?.split("/").pop() ?? "");
+  // Skipping refinement is the user's choice, not a problem: a plain line, not a warning (plan N2.5).
+  let skipped = $derived(!!record.flags?.refinement_skipped);
+  let warnings = $derived((record.warnings ?? []).filter((w) => !(skipped && w.startsWith("已跳过离线校正"))));
   let segments = $derived(savedPath(record.output, record.course));
 
   async function reveal() {
@@ -69,9 +73,10 @@
         {/each}
       </ul>
     {/if}
-    {#if record.warnings?.length}
+    {#if skipped}<p class="skipped">已跳过校正，笔记依据实时转录</p>{/if}
+    {#if warnings.length}
       <ul class="warnings">
-        {#each record.warnings as warning (warning)}<li>{warning}</li>{/each}
+        {#each warnings as warning (warning)}<li>{warning}</li>{/each}
       </ul>
     {/if}
     {#if error}<p class="error" role="alert">{error}</p>{/if}
@@ -109,10 +114,9 @@
   .mono { font-family: 'Geist Mono', monospace; font-size: 13px; overflow-wrap: anywhere; }
   .callout {
     padding: 18px 20px;
-    border: 1px solid rgba(255, 180, 84, 0.35);
-    border-radius: 14px;
-    background: rgba(255, 180, 84, 0.06);
-    color: #FFB454;
+    border-left: 2px solid #FFB454;
+    background: rgba(255, 255, 255, 0.04);
+    color: #ECEAE4;
     font-size: 15px;
     line-height: 1.65;
   }
@@ -122,7 +126,6 @@
     overflow: auto;
     padding: 16px 18px;
     border: 1px solid #23252A;
-    border-radius: 14px;
     background: rgba(255, 255, 255, 0.025);
     font-family: 'Geist Mono', monospace;
     font-size: 12px;
@@ -145,6 +148,7 @@
   }
   .stages li:last-child { border-bottom: 1px solid #1D1F23; }
   .time { font-family: 'Geist Mono', monospace; font-size: 12px; color: #8E9096; }
+  .skipped { font-size: 15px; line-height: 1.65; color: #ECEAE4; }
   .warnings { display: flex; flex-direction: column; gap: 8px; font-size: 13px; line-height: 1.6; color: #FFB454; }
   .error { font-size: 13px; color: #FF6B5E; }
   .bar {
