@@ -7,6 +7,7 @@
   let lines = $state<HTMLElement>();
   let probe = $state<HTMLElement>();
   let small = $state(false);
+  let clipped = $state(false);
   let shown = "";
   let currentText = $derived(tailText(view.current));
 
@@ -25,6 +26,19 @@
     return () => observer.disconnect();
   });
 
+  // Long confirmed lines that outgrow the column fade out at the top instead of pushing the page down.
+  $effect(() => {
+    void [view, currentText];  // Re-measured after every change of the lines, once the DOM has them.
+    if (!lines) return;
+    const element = lines;
+    const measure = () => (clipped = element.scrollHeight > element.clientHeight + 1);
+    const observer = new ResizeObserver(measure);
+    observer.observe(element);
+    for (const child of element.children) observer.observe(child);
+    measure();
+    return () => observer.disconnect();
+  });
+
   // A newly confirmed segment lifts the whole block: 300 ms shift and fade (plan 6.2).
   $effect(() => {
     const key = view.key;
@@ -38,7 +52,7 @@
 
 <section class="live">
   <span class="label">实时转录</span>
-  <div class="lines" bind:this={lines} aria-live="polite">
+  <div class="lines" class:clipped bind:this={lines} aria-live="polite">
     {#each view.older as text, i (i)}
       <p class="older size{i + 4 - view.older.length}">{text}</p>
     {/each}
@@ -61,7 +75,17 @@
   /* The reference's lines sit directly in the column; this wrapper keeps the same 22px rhythm. */
   /* HANDOFF 3.3: confirmed lines show in full. When they outgrow the column, the newest stay in view
      and the oldest leave at the top (justify-content: flex-end overflows upward). */
-  .lines { display: flex; flex-direction: column; justify-content: flex-end; gap: 22px; min-height: 0; overflow: hidden; }
+  .lines {
+    display: flex;
+    flex-direction: column;
+    justify-content: flex-end;
+    gap: 22px;
+    min-height: 0;
+    /* The header, label, marker and footer take about 380px of the window. */
+    max-height: max(240px, calc(100vh - 380px));
+    overflow: hidden;
+  }
+  .lines.clipped { mask-image: linear-gradient(to bottom, transparent 0, #000 48px); }
   p { margin: 0; }
   .older { flex: none; font-size: 22px; line-height: 1.4; font-weight: 300; overflow-wrap: anywhere; }
   .size0 { color: #4A4C52; }
@@ -70,7 +94,8 @@
   .size3 { font-size: 26px; color: #A9ABB0; }
   .current { flex: none; font-size: 38px; line-height: 1.25; font-weight: 400; letter-spacing: -0.01em; color: #FFFFFF; text-wrap: pretty; }
   .current.small { font-size: 30px; }
-  .current-wrap { position: relative; flex: none; }
+  /* overflow: the 38px probe may be taller than the shown line and must not count as overflow. */
+  .current-wrap { position: relative; flex: none; overflow: hidden; }
   .probe { position: absolute; top: 0; left: 0; right: 0; visibility: hidden; pointer-events: none; }
   .waiting { color: #8E9096; }
   .cursor {

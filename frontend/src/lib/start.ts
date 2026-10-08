@@ -33,3 +33,13 @@ export function asrOverride(config: Config, remembered: string | undefined, show
   if (!shown || !live) return {};
   return { asr_model: liveModel(config, remembered, shown, live, on) };
 }
+
+/**
+ * Why the switch is missing and the command that fixes it. The plan names `./install.sh --with-qwen`;
+ * that installs the environment but downloads no weights, so missing weights get `lecture prepare`.
+ */
+export function qwenMissing(live: QwenLive): { reason: string; command: string; after?: string } {
+  if (!live.env_ready) return { reason: "未安装 Qwen 环境", command: live.install };
+  if (!live.cached) return { reason: "未下载 Qwen 模型", command: `lecture prepare --asr-model ${live.model}` };
+  return { reason: "没有可用的 NVIDIA GPU", command: live.install, after: "并检查 NVIDIA 驱动" };
+}

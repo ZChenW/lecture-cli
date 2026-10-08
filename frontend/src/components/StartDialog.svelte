@@ -5,7 +5,7 @@
   import { asrSummary } from "../lib/format";
   import type { ListOption } from "../lib/listbox";
   import { navigate } from "../lib/router";
-  import { QWEN_SUGGESTION, asrOverride, liveModel, qwenDefault, qwenRowShown } from "../lib/start";
+  import { QWEN_SUGGESTION, asrOverride, liveModel, qwenDefault, qwenMissing, qwenRowShown } from "../lib/start";
   import { app, message } from "../lib/state.svelte";
   import type { Missing, QwenLive } from "../lib/types";
   import Choices from "./Choices.svelte";
@@ -110,7 +110,8 @@
             这堂课改用 Qwen
           </button>
         {:else if live}
-          <p class="field-note">本机还不能用 Qwen 实时转录（{!live.env_ready ? "未安装 Qwen 环境" : !live.cached ? "未下载 Qwen 模型" : "没有可用的 NVIDIA GPU"}）。安装：<code>{live.install}</code></p>
+          {@const gap = qwenMissing(live)}
+          <p class="field-note">本机还不能用 Qwen 实时转录（{gap.reason}）。运行 <code>{gap.command}</code>{gap.after ? `，${gap.after}` : ""}</p>
         {:else if !liveFailed}
           <p class="field-note">正在检查本机的 Qwen 环境…</p>
         {/if}
@@ -160,7 +161,7 @@
   .qwen { display: flex; flex-direction: column; gap: 8px; padding: 14px 0; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); }
   .qwen p { margin: 0; font-size: 14px; }
   .qwen .field-note { font-size: 12px; line-height: 1.7; }
-  .qwen code { font-family: var(--mono); font-size: 12px; }
+  .qwen code { font-family: var(--mono); font-size: 12px; white-space: nowrap; }
   .switch {
     display: inline-flex;
     align-items: center;

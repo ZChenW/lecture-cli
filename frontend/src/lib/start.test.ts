@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { asrOverride, liveModel, qwenDefault, qwenRowShown } from "./start";
+import { asrOverride, liveModel, qwenDefault, qwenMissing, qwenRowShown } from "./start";
 import type { Config, QwenLive } from "./types";
 
 const config = { asr_backend: "local", asr_model: "small" } as Config;
@@ -35,5 +35,14 @@ describe("start dialog Qwen row (plan N3.1)", () => {
     expect(liveModel(config, "qwen3-asr-1.7b", false, null, false)).toBe("qwen3-asr-1.7b");
     expect(liveModel(config, undefined, false, null, false)).toBe("small");
     expect(liveModel({ ...config, asr_backend: "api", asr_model: "x" } as Config, "qwen3-asr-1.7b", false, null, false)).toBe("x");
+  });
+
+  it("names what is missing and the command that fixes it", () => {
+    expect(qwenMissing({ ...missing, env_ready: false, cached: false })).toEqual(
+      { reason: "未安装 Qwen 环境", command: "./install.sh --with-qwen" });
+    expect(qwenMissing({ ...missing, cached: false })).toEqual(
+      { reason: "未下载 Qwen 模型", command: "lecture prepare --asr-model qwen3-asr-1.7b" });
+    expect(qwenMissing(missing)).toEqual(
+      { reason: "没有可用的 NVIDIA GPU", command: "./install.sh --with-qwen", after: "并检查 NVIDIA 驱动" });
   });
 });
