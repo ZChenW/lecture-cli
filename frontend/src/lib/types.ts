@@ -27,6 +27,8 @@ export interface Config {
   device: string | number | null;
   refine: boolean;
   refine_model: string;
+  refine_backend?: "local" | "api";
+  refine_api_model?: string;
   auto_gain: boolean;
   qwen_python: string | null;
   onboarded?: boolean;

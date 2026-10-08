@@ -76,7 +76,7 @@
       <SettingsSection id="asr" title="转录" about="上课时把声音变成文字的方式。本地转录不上传音频。" onsave={() => asr!.save()}>
         <AsrForm bind:this={asr} settings />
       </SettingsSection>
-      <SettingsSection id="refine" title="课后校正" about="下课后用本地 Qwen 把整节课的录音重新转录一遍，修正实时转录的错漏。"
+      <SettingsSection id="refine" title="课后校正" about="下课后把整节课的录音重新转录一遍，修正实时转录的错漏。可以在本机用 Qwen，也可以交给云端转录服务。"
         onsave={() => refine!.save()}>
         <RefineForm bind:this={refine} />
       </SettingsSection>

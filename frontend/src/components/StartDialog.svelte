@@ -6,6 +6,7 @@
   import type { ListOption } from "../lib/listbox";
   import { navigate } from "../lib/router";
   import { QWEN_SUGGESTION, asrOverride, liveModel, qwenDefault, qwenMissing, qwenRowShown } from "../lib/start";
+  import { UPLOAD_NOTICE, refineTitle } from "../lib/refine";
   import { app, message } from "../lib/state.svelte";
   import type { Missing, QwenLive } from "../lib/types";
   import Choices from "./Choices.svelte";
@@ -122,8 +123,9 @@
       <div class="field">
         <span class="label">下课后</span>
         <Choices label="下课后" bind:value={refine} options={[
-          { value: "on", title: "用 Qwen 校正转录" }, { value: "off", title: "直接用实时转录" },
+          { value: "on", title: refineTitle(boot.config) }, { value: "off", title: "直接用实时转录" },
         ]} />
+        {#if refine === "on" && boot.config.refine_backend === "api"}<span class="field-note">{UPLOAD_NOTICE}</span>{/if}
       </div>
     {/if}
     {#if error}<p class="error-text" role="alert">{error}</p>{/if}
