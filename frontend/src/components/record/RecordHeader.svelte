@@ -1,36 +1,15 @@
 <script lang="ts">
-  import { tick } from "svelte";
   import { navigate } from "../../lib/router";
   import type { Snapshot } from "../../lib/types";
 
   // ondiscard is set only while recording: discarding is refused once closing has begun.
   let { snapshot, ondiscard }: { snapshot: Snapshot | null; ondiscard?: () => void } = $props();
   let engine = $derived(snapshot ? [snapshot.asr.device_label, snapshot.asr.model].filter(Boolean).join(" · ") : "");
-  let open = $state(false);
   let armed = $state(false);
   let disarm: ReturnType<typeof setTimeout> | undefined;
-  let menuButton = $state<HTMLButtonElement>();
-  let item = $state<HTMLButtonElement>();
-  let root = $state<HTMLElement>();
 
-  async function toggle() {
-    open = !open;
-    armed = false;
-    clearTimeout(disarm);
-    if (open) {
-      await tick();
-      item?.focus();
-    }
-  }
-
-  function close(refocus = true) {
-    open = false;
-    armed = false;
-    clearTimeout(disarm);
-    if (refocus) menuButton?.focus();
-  }
-
-  // Plan N2.5: the first press only arms the item; a second press within 3 s discards.
+  // Plan GUI-3 items 1 and 6: a plain text button; the first press arms it ("确认放弃"), a second
+  // press within 3 s discards.
   function discard() {
     clearTimeout(disarm);
     if (!armed) {
@@ -38,24 +17,17 @@
       disarm = setTimeout(() => (armed = false), 3000);
       return;
     }
-    close();
+    armed = false;
     ondiscard?.();
   }
 
-  function onkey(event: KeyboardEvent) {
-    if (event.key === "Escape") {
-      event.preventDefault();
-      event.stopPropagation();
-      close();
-    } else if (event.key === "Tab") {
-      close(false);
+  $effect(() => {
+    if (!ondiscard) {
+      armed = false;
+      clearTimeout(disarm);
     }
-  }
-
-  $effect(() => { if (!ondiscard && open) close(false); });
+  });
 </script>
-
-<svelte:document onpointerdown={(event) => open && root && !root.contains(event.target as Node) && close(false)} />
 
 <header class="top">
   <div class="brand">
@@ -71,20 +43,11 @@
         stroke-linecap="round" aria-hidden="true"><path d="M4 7h10M18 7h2M4 17h2M10 17h10" /><circle cx="16" cy="7" r="2" /><circle cx="8" cy="17" r="2" /></svg>
     </button>
     {#if ondiscard}
-      <div class="more" bind:this={root}>
-        <button class="round" bind:this={menuButton} aria-label="更多操作" title="更多操作" aria-haspopup="menu"
-          aria-expanded={open} aria-controls={open ? "record-menu" : undefined} onclick={toggle}>
-          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"
-            stroke-linecap="round" aria-hidden="true"><path d="M5 12h.01M12 12h.01M19 12h.01" /></svg>
-        </button>
-        {#if open}
-          <div class="menu" id="record-menu" role="menu" aria-label="更多操作" tabindex="-1" onkeydown={onkey}>
-            <button role="menuitem" class="item" class:armed bind:this={item} onclick={discard} aria-live="polite">
-              {armed ? "再按一次，录音和笔记都会删除" : "放弃这堂课"}
-            </button>
-          </div>
-        {/if}
-      </div>
+      <button type="button" class="discard has-tip" class:armed onclick={discard} aria-live="polite"
+        aria-describedby="discard-tip">
+        {armed ? "确认放弃" : "放弃这堂课"}
+        <span class="tip" aria-hidden="true" id="discard-tip">录音和笔记都会删除，无法找回</span>
+      </button>
     {/if}
   </div>
 </header>
@@ -116,35 +79,21 @@
     justify-content: center;
     cursor: pointer;
   }
-  .round:hover, .round[aria-expanded="true"] { color: #ECEAE4; border-color: #34363B; }
-  .more { position: relative; }
-  /* HANDOFF 3.2: the warning banner's surface and 10px radius, with room around the item. The banner
-     is rgba(255,255,255,0.04) over #0B0C0E; a menu covers text, so it uses that colour opaque. */
-  .menu {
-    position: absolute;
-    right: 0;
-    top: calc(100% + 6px);
-    min-width: 280px;
-    padding: 8px;
-    border-radius: 10px;
-    background: #151618;
-    border: 1px solid #26282C;
-    box-shadow: 0 12px 32px rgba(0, 0, 0, 0.45);
-    outline: none;
-  }
-  .item {
-    width: 100%;
+  .round:hover { color: #ECEAE4; border-color: #34363B; }
+  /* Plan GUI-3 item 6: secondary text, far weaker than 下课; it wraps under the device label when narrow. */
+  .discard {
     min-height: 44px;
-    padding: 0 16px;
+    padding: 0 8px;
     border: 0;
-    border-radius: 6px;
     background: transparent;
-    color: #ECEAE4;
-    font-size: 15px;
-    text-align: left;
+    color: #8E9096;
+    font-size: 14px;
     white-space: nowrap;
     cursor: pointer;
   }
-  .item:hover, .item:focus-visible { background: #23252A; outline: none; }
-  .item.armed { color: #FF6B5E; }
+  .discard:hover { color: #ECEAE4; text-decoration: underline; text-underline-offset: 4px; }
+  .discard:focus-visible { outline-offset: 0; }
+  .discard.armed { color: #FF6B5E; }
+  /* The bar is at the top of the window: the tip opens below the button. */
+  .discard .tip { top: calc(100% + 8px); bottom: auto; }
 </style>

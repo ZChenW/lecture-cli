@@ -193,9 +193,11 @@
                 <Icon name="terminal" /><span class="tip" aria-hidden="true">在终端中打开</span>
               </button>
               <button type="button" class="tool delete has-tip" class:confirm={armed === note.name}
-                aria-label={armed === note.name ? "再按一次，移入回收站" : "删除"} onclick={() => remove(note)}>
+                aria-label={armed === note.name ? "确认删除，移入回收站，可以找回" : "删除"} onclick={() => remove(note)}>
                 <Icon name="trash" />
-                {#if armed === note.name}<span class="confirm-text" aria-hidden="true">再按一次，移入回收站</span>
+                <!-- Plan GUI-3 item 1: a short second step; the tooltip says where the note goes. -->
+                {#if armed === note.name}<span class="confirm-text" aria-hidden="true">确认删除</span>
+                  <span class="tip" aria-hidden="true">移入回收站，可以找回</span>
                 {:else}<span class="tip" aria-hidden="true">删除</span>{/if}
               </button>
             </div>
