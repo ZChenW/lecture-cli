@@ -268,7 +268,10 @@
     cursor: pointer;
   }
   .quiet:hover { color: #FFFFFF; }
-  .scroll { flex: 1; min-height: 0; overflow-y: auto; margin: 0 -44px; padding: 0 44px; }
+  /* position: relative makes the middle the containing block of absolutely positioned descendants
+     (the checks' .visually-hidden labels), so they scroll and clip with it instead of making the
+     whole page scroll in a short window (PLAN-GUI-3 section 8: step 5 at 1366x700). */
+  .scroll { position: relative; flex: 1; min-height: 0; overflow-y: auto; margin: 0 -44px; padding: 0 44px; }
   .body { display: flex; flex-wrap: wrap; gap: 40px 96px; align-items: flex-start; padding: 72px 0 40px; }
   .intro { flex: 1 1 320px; max-width: 440px; display: flex; flex-direction: column; gap: 36px; }
   .number { font-family: "Instrument Serif", serif; font-size: 168px; line-height: 0.8; letter-spacing: -0.03em; color: #ECEAE4; }
