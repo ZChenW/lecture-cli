@@ -37,7 +37,9 @@ STATIC = Path(__file__).parent / "static"
 KINDS = ("notes", "asr")
 SSE_INTERVAL = 0.25
 KEEPALIVE_SECONDS = 15
-OVERRIDES = {"language", "interval", "refine", "auto_gain", "context_path", "demo", "asr_model"}
+# remember_asr_model (plan GUI-3 item 3): false when the dialog could not offer a free choice of
+# live model (Qwen not ready, or language 自动); the lecture uses asr_model, the course keeps its choice.
+OVERRIDES = {"language", "interval", "refine", "auto_gain", "context_path", "demo", "asr_model", "remember_asr_model"}
 SENTINELS = {"pause": ("pause", True), "resume": ("pause", False), "stop": ("stop", True),
              "skip-refine": ("skip-refine", True), "discard": ("discard", True)}
 OPEN_MODES = ("reveal", "terminal", "editor")
@@ -400,10 +402,16 @@ def create_app(port: int, token: str, *, on_quit=None, sessions: Sessions | None
                 settings.remember_course_language(course.name, overrides["language"].strip())
             except OSError:
                 pass  # The lecture is already running; only the remembered choice is lost.
-        if "asr_model" in overrides and not overrides.get("demo"):
+        if "asr_model" in overrides and overrides.get("remember_asr_model", True) and not overrides.get("demo"):
             try:
-                # Plan N3.1: the Qwen switch, on or off, is this course's choice from now on.
+                # Plan N3.1: the live model chosen in the dialog is this course's choice from now on.
                 settings.remember_course_asr_model(course.name, overrides["asr_model"])
+            except OSError:
+                pass
+        if "refine" in overrides and not overrides.get("demo"):
+            try:
+                # Plan GUI-3 item 3: "这门课会记住以上选择" covers 下课后 too (the GUI dialog's default).
+                settings.remember_course_setting(course.name, "refine", "on" if overrides["refine"] else "off")
             except OSError:
                 pass
         return JSONResponse(await run_in_threadpool(sessions.snapshot, active), status_code=201)

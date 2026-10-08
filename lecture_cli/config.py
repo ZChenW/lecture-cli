@@ -155,19 +155,22 @@ def validate(config: dict) -> list[Problem]:
     from .openers import problems as opener_problems
     problems += [Problem(field, message) for field, message in opener_problems(config)]
     if not course_settings_valid(config.get("course_settings")):
-        problems.append(Problem("course_settings", "course_settings 必须形如 {\"课程名\": {\"language\": \"zh\", \"asr_model\": \"qwen3-asr-1.7b\"}}"))
+        problems.append(Problem("course_settings", "course_settings 必须形如 {\"课程名\": {\"language\": \"zh\", \"asr_model\": \"qwen3-asr-1.7b\", \"refine\": \"on\"}}"))
     if not isinstance(config.get("onboarded"), bool):
         problems.append(Problem("onboarded", "onboarded 必须是 true 或 false"))
     return problems
 
 
-COURSE_SETTINGS = ("language", "asr_model")  # asr_model: plan N3.1, the live model chosen for this course
+# asr_model: plan N3.1, the live model chosen for this course. refine: plan GUI-3 item 3, "on" or
+# "off" as last chosen in the GUI start dialog; only that dialog reads it (lecture start does not).
+COURSE_SETTINGS = ("language", "asr_model", "refine")
 
 
 def course_settings_valid(value) -> bool:
     return isinstance(value, dict) and all(
         isinstance(name, str) and isinstance(entry, dict) and all(
-            key in COURSE_SETTINGS and isinstance(setting, str) and setting.strip() for key, setting in entry.items())
+            key in COURSE_SETTINGS and isinstance(setting, str) and setting.strip()
+            and (key != "refine" or setting in ("on", "off")) for key, setting in entry.items())
         for name, entry in value.items())
 
 
