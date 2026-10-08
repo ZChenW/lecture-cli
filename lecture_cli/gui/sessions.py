@@ -233,6 +233,9 @@ def snapshot(directory: Path, cache: SnapshotCache | None = None) -> dict:
                         for kind, field in (("device", "device_notice"), ("gain", "gain_notice"), ("warning", "warning"))
                         if asr.get(field)],
             "error": asr.get("error") or None,
+            # Plan N3.4: long weak input while someone talks. The mic cell and a dismissible banner show it;
+            # it is not one of the notices, which are not dismissible.
+            "weak_input": asr.get("weak_input") or None,
         },
         "transcript": {
             "count": cache.transcript.count,

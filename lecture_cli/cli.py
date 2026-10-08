@@ -33,6 +33,7 @@ from .glossary import load_glossary
 from .providers import notes_label
 from . import runs
 from . import config as settings
+from .input_level import summary as weak_input_summary
 
 console = Console()
 
@@ -136,6 +137,8 @@ def reap_stale_sessions() -> None:
                 journal = Journal(directory)
                 try:
                     journal.set_info("warning", "上次录制异常中断；已恢复可取得的文字，未识别的音频未保存。")
+                    if weak := weak_input_summary(read_json(directory / "asr-state.json").get("weak_input_seconds")):
+                        journal.add_warning(weak)
                     if meta.get("refine") and refined_events(directory) is None:
                         from .refinement import WARNING
                         journal.add_warning(WARNING)
@@ -550,6 +553,8 @@ def session(args, config: dict, course: Path) -> int:
                         journal.add_warning(warning)
                         warnings.append(warning)
                         console.print(warning, style="yellow", markup=False)
+                    if weak := weak_input_summary(state.get("weak_input_seconds")):
+                        journal.add_warning(weak)  # Plan N3.4: one sentence, only past two minutes.
                     if meta["refine"] and refined_events(directory) is None:
                         from .refinement import WARNING, SKIPPED
                         # A user skip is not a failure; the notes say which one happened.

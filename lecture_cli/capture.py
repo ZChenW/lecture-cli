@@ -13,6 +13,7 @@ from .storage import read_json, write_json
 from .audio_buffer import AudioBuffer, drain_timeout
 from .asr import build_engine, session_context
 from .mic_gain import mic_gain
+from .input_level import WeakInput
 
 
 def timestamp(seconds: float) -> str:
@@ -122,6 +123,7 @@ async def record(directory: Path) -> None:
     paused = False
     last_write = 0.0
     gain = mic_gain(meta)
+    weak = WeakInput()
 
     def publish(force=False):
         nonlocal last_write
@@ -183,6 +185,7 @@ async def record(directory: Path) -> None:
             if want_pause != paused:
                 paused = want_pause
                 audio.pause(paused)
+                weak.pause()
                 if gain:
                     gain.pause(paused)
                 if stream:
@@ -213,6 +216,11 @@ async def record(directory: Path) -> None:
                 archive.append(pcm)
             await processor.process_audio(pcm)
             state["seconds"] += len(pcm) / 32000
+            if weak.add(pcm, transcript.count):
+                # GUI-only, never "warning": the saved note reports that one; only a long total is summarised.
+                state["weak_input"] = weak.notice
+                state["weak_input_seconds"] = weak.seconds
+                publish(True)
             publish()
         if stream:
             stream.stop()

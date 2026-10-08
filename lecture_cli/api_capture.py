@@ -18,6 +18,7 @@ from .capture import Transcript
 from .refinement import BYTES_PER_SECOND, segment_cut
 from .storage import read_json, write_json
 from .mic_gain import mic_gain
+from .input_level import WeakInput
 
 API_TIMEOUT = httpx.Timeout(60, connect=10)
 RETRY_WARNING = "转录服务暂不可用，正在重试；音频已暂存"
@@ -141,6 +142,7 @@ async def record(directory: Path, transport=None):
         extracted = 0.0
         last_write = 0.0
         gain = mic_gain(meta)
+        weak = WeakInput()
 
         def publish(force=False):
             nonlocal last_write
@@ -167,6 +169,7 @@ async def record(directory: Path, transport=None):
                 if want_pause != paused:
                     paused = want_pause
                     audio.pause(paused)
+                    weak.pause()
                     if gain:
                         gain.pause(paused)
                     if stream:
@@ -205,6 +208,12 @@ async def record(directory: Path, transport=None):
                 if pcm:
                     pending.extend(pcm)
                     extracted += len(pcm) / BYTES_PER_SECOND
+                    if weak.add(pcm, transcript.count):
+                        # GUI-only, never "warning": retries clear that one, and the saved note reports it.
+                        # Only a long total reaches the note, as one summary sentence.
+                        state["weak_input"] = weak.notice
+                        state["weak_input_seconds"] = weak.seconds
+                        publish(True)
                     publish()
                 elif not finished.is_set():
                     await asyncio.sleep(0.05)

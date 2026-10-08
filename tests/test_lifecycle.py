@@ -76,7 +76,10 @@ if "_capture" in sys.argv:
         while not (directory / "stop").exists():
             time.sleep(0.05)
         transcript.append("These are the final words.", 1, 2)
-        write_json(directory / "asr-state.json", {"status": "转录完成", "count": 2})
+        final = {"status": "转录完成", "count": 2}
+        if os.environ.get("LECTURE_TEST_WEAK_SECONDS"):
+            final.update(weak_input="收到的声音很弱", weak_input_seconds=float(os.environ["LECTURE_TEST_WEAK_SECONDS"]))
+        write_json(directory / "asr-state.json", final)
         return 0
     capture.run = run
 ''')
@@ -471,3 +474,36 @@ def test_headless_requires_course_name(stub_runtime):
     result = subprocess.run([sys.executable, "-m", "lecture_cli", "--courses-dir", str(root), "start", "--headless"],
                             env=env, stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=30)
     assert result.returncode == 1 and "无头模式需要指定课程名" in result.stdout
+
+
+@pytest.mark.parametrize("seconds", [110, 150])
+def test_long_weak_input_adds_one_sentence_to_processing_hints(stub_runtime, isolated_run_registry, seconds):
+    root, env = stub_runtime
+    env["LECTURE_TEST_WEAK_SECONDS"] = str(seconds)
+    proc = subprocess.Popen([sys.executable, "-m", "lecture_cli", "--courses-dir", str(root),
+                             "start", "math421", "--headless", "--interval", "1"], env=env,
+                            stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+    try:
+        directory = wait_until(lambda: own_session(root))
+        (directory / "stop").touch()
+        output = proc.communicate(timeout=15)[0]
+        assert proc.returncode == 0, output
+        record = only_record(isolated_run_registry)
+        note = Path(record["output"])
+        review = attachment_path(note, "review")
+        written = note.read_text() + (review.read_text() if review.exists() else "")
+        sentence = "本节课累计约 2 分钟收到的声音很弱，这些部分的转录可能不准。"
+        if seconds > 120:
+            # The note's existing hint line and the review file's 处理提示 both carry it, once each.
+            assert note.read_text().count(sentence) == review.read_text().count(sentence) == 1
+            assert "## 处理提示\n\n" + sentence in review.read_text()
+            assert "> 记录提示：" + sentence in note.read_text()
+        else:
+            assert "声音很弱" not in written
+        # The live notice itself never reaches the note or the run registry.
+        assert "请把麦克风靠近讲话人" not in written
+        assert "声音很弱" not in json.dumps(record, ensure_ascii=False)
+    finally:
+        if proc.poll() is None:
+            proc.kill()
+            proc.wait()
