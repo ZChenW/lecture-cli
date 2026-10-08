@@ -31,6 +31,12 @@ DEFAULTS = {
     "refine_model": "qwen3-asr-1.7b",
     "auto_gain": True,
     "qwen_python": None,
+    # Program names from lecture_cli.openers tables; None picks the first one installed.
+    "file_manager": None,
+    "terminal": None,
+    "editor": None,
+    # Per-course remembered choices, e.g. {"MATH421": {"language": "zh"}}.
+    "course_settings": {},
 }
 # Environment variables first, then files in the configuration directory; legacy names last.
 KEY_SOURCES = {
@@ -39,6 +45,11 @@ KEY_SOURCES = {
 }
 # Child processes receive keys only under these names.
 KEY_VARIABLES = {"notes": "LECTURE_NOTES_API_KEY", "asr": "LECTURE_ASR_API_KEY"}
+
+
+# Fields only the GUI uses; command-line lectures never stop on them.
+GUI_ONLY = ("courses_dir", "file_manager", "terminal", "editor", "file_manager_command", "terminal_command",
+            "editor_command", "course_settings")
 
 
 @dataclass(frozen=True)
@@ -130,7 +141,34 @@ def validate(config: dict) -> list[Problem]:
         problems.append(Problem("notes_extra_body", "notes_extra_body 必须是 JSON 对象"))
     if config.get("refine_model") not in QWEN_MODELS:
         problems.append(Problem("refine_model", "课后校正模型必须是 " + "、".join(QWEN_MODELS) + " 之一"))
+    from .openers import problems as opener_problems
+    problems += [Problem(field, message) for field, message in opener_problems(config)]
+    if not course_settings_valid(config.get("course_settings")):
+        problems.append(Problem("course_settings", "course_settings 必须形如 {\"课程名\": {\"language\": \"zh\"}}"))
     return problems
+
+
+def course_settings_valid(value) -> bool:
+    return isinstance(value, dict) and all(
+        isinstance(name, str) and isinstance(entry, dict) and all(
+            key == "language" and isinstance(language, str) and language.strip() for key, language in entry.items())
+        for name, entry in value.items())
+
+
+def course_language(config: dict, course: str) -> str | None:
+    """The language remembered for this course, if any; unknown courses simply have none."""
+    entry = config.get("course_settings")
+    entry = entry.get(course) if isinstance(entry, dict) else None
+    language = entry.get("language") if isinstance(entry, dict) else None
+    return language if isinstance(language, str) and language.strip() else None
+
+
+def remember_course_language(course: str, language: str) -> None:
+    current = load()
+    remembered = current.get("course_settings")
+    remembered = dict(remembered) if course_settings_valid(remembered) else {}
+    remembered[course] = {**remembered.get(course, {}), "language": language}
+    save({**current, "course_settings": remembered})
 
 
 def is_configured(config: dict, keys: dict) -> bool:

@@ -24,7 +24,7 @@
   async function reveal() {
     error = "";
     try {
-      await api.open(record.output ?? "", "folder");
+      await api.open(record.output ?? "", "reveal");
     } catch (e) {
       error = message(e);
     }

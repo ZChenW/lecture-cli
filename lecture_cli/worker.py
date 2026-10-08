@@ -190,8 +190,9 @@ def run(directory: Path) -> int:
             journal.add_warning(capture_warning)
         from .final_notes import WORKERS, generate
         if journal.meta.get("refine") and refined_events(directory) is None:
-            from .refinement import WARNING
-            journal.add_warning(WARNING)
+            from .refinement import SKIPPED, WARNING
+            skipped = read_json(directory / "refinement-state.json").get("skipped") is True
+            journal.add_warning(SKIPPED if skipped else WARNING)
         generate(journal, final_events(directory), workers=WORKERS)
         journal.render(finished=True)
         detail_status = dict(journal.db.execute("SELECT key, value FROM info")).get("detail_status")

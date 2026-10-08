@@ -7,7 +7,7 @@ reader must change with it."""
 import json
 import re
 
-from lecture_cli.storage import REVIEW_MARKER, Journal, write_json
+from lecture_cli.storage import REVIEW_MARKER, Journal, attachment_path, write_json
 
 
 def render(tmp_path, finished=True, details=True):
@@ -49,12 +49,12 @@ def test_main_file_has_the_parts_the_reader_splits(tmp_path):
     # References are links to the transcript anchor, labelled version-L….
     assert re.search(r"\[live-L2–L4\]\([^)]*\.transcript\.md#live-L2\)", main)
     # 待核对 lines start the paragraph or list item.
-    review = output.with_suffix(".review.md").read_text()
+    review = attachment_path(output, "review").read_text()
     assert review.startswith("# ") and re.search(r"\[live-L5\]\([^)]*\.transcript\.md#live-L5\)", review)
 
 
 def test_transcript_segments_are_anchored_as_the_panel_expects(tmp_path):
-    transcript = render(tmp_path).with_suffix(".transcript.md").read_text()
+    transcript = attachment_path(render(tmp_path), "transcript").read_text()
     # note.ts parseTranscript: "## live" groups, an anchor line, then "### live-L1 · start–end", then text.
     assert re.search(r"^> 正文来源版本：(live|refined)", transcript, re.M)
     segment = re.compile(r'^## live\n\n<a id="live-L1"></a>\n\n### live-L1 · 00:00:01\.00–00:00:01\.50\n\nline 1$', re.M)

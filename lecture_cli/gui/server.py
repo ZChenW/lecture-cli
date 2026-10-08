@@ -10,7 +10,6 @@ import json
 import os
 from pathlib import Path
 import secrets
-import shutil
 import subprocess
 import sys
 import threading
@@ -24,9 +23,10 @@ from starlette.routing import Mount, Route
 from starlette.staticfiles import StaticFiles
 
 from .. import config as settings
+from .. import openers as desktop
 from ..providers import ASR_PRESETS, NOTES_PRESETS, test_asr, test_notes
 from . import library
-from .sessions import Busy, Sessions, StartError
+from .sessions import Busy, Sessions, StartError, read_state
 
 COOKIE = "lecture_session"
 # Everything the frontend needs comes from this origin: bundled scripts, styles and fonts,
@@ -39,7 +39,8 @@ SSE_INTERVAL = 0.25
 KEEPALIVE_SECONDS = 15
 OVERRIDES = {"language", "interval", "refine", "auto_gain", "context_path", "demo"}
 SENTINELS = {"pause": ("pause", True), "resume": ("pause", False), "stop": ("stop", True),
-             "skip-refine": ("skip-refine", True)}
+             "skip-refine": ("skip-refine", True), "discard": ("discard", True)}
+OPEN_MODES = ("reveal", "terminal", "editor")
 DEVICE_NOTES = {
     "default": "不选择设备时使用系统默认输入，推荐。",
     "pipewire": "系统默认以及名为 pipewire、default、pulse 的设备经由 PipeWire 默认源录音，可自动调节音量；其他设备不自动调节。",
@@ -198,13 +199,12 @@ def check_overrides(overrides, root: Path) -> tuple[dict, Path | None]:
 
 
 def create_app(port: int, token: str, *, on_quit=None, sessions: Sessions | None = None,
-               transport=None, opener=None) -> Starlette:
+               transport=None, openers: desktop.Openers | None = None, trash=None) -> Starlette:
+    """openers and trash (a library.trash_note replacement) are injected by tests: nothing is launched."""
     sessions = sessions or Sessions()
     tasks = Tasks()
-    system_opener = opener is None
-    opener = opener or (lambda target: subprocess.Popen(
-        ["xdg-open", str(target)], stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL, start_new_session=True))
+    openers = openers or desktop.Openers()
+    trash = trash or library.trash_note
 
     def keys() -> dict:
         return {kind: settings.key_status(kind) for kind in KINDS}
@@ -360,6 +360,12 @@ def create_app(port: int, token: str, *, on_quit=None, sessions: Sessions | None
             raise ApiError(409, "busy", "已有进行中的课堂")
         except StartError as exc:
             raise ApiError(422, "start_failed", str(exc), log=exc.log)
+        if "language" in overrides and not overrides.get("demo"):
+            try:
+                # The next lecture of this course starts with the language chosen now.
+                settings.remember_course_language(course.name, overrides["language"].strip())
+            except OSError:
+                pass  # The lecture is already running; only the remembered choice is lost.
         return JSONResponse(await run_in_threadpool(sessions.snapshot, active), status_code=201)
 
     async def get_active(request):
@@ -373,6 +379,8 @@ def create_app(port: int, token: str, *, on_quit=None, sessions: Sessions | None
         if not active:
             raise ApiError(404, "no_active_run", "没有进行中的课堂")
         name, present = SENTINELS[action]
+        if action == "discard" and read_state(active["directory"] / "controller-state.json").get("phase") != "recording":
+            raise ApiError(409, "not_recording", "只能在录制中放弃本次课堂；收尾开始后会照常保存")
         sentinel = active["directory"] / name
         sentinel.touch() if present else sentinel.unlink(missing_ok=True)
         return JSONResponse(await run_in_threadpool(sessions.snapshot, active))
@@ -418,16 +426,38 @@ def create_app(port: int, token: str, *, on_quit=None, sessions: Sessions | None
 
     async def open_path(request):
         body = await body_of(request)
-        root = courses_root(settings.load())
-        if body.get("mode") not in ("file", "folder") or not isinstance(body.get("path"), str):
-            raise ApiError(422, "invalid_request", "需要 path 和 mode（file 或 folder）")
+        config = settings.load()
+        root = courses_root(config)
+        # Only a mode and a path: which program runs comes from the fixed tables or config.json.
+        if set(body) - {"path", "mode"} or body.get("mode") not in OPEN_MODES or not isinstance(body.get("path"), str):
+            raise ApiError(422, "invalid_request", "需要 path 和 mode（reveal、terminal 或 editor）")
         path = library.inside(root, body["path"])
-        if not path.exists() or (body["mode"] == "file" and not path.is_file()):
+        if not path.exists() or (body["mode"] == "editor" and not path.is_file()):
             raise ApiError(404, "not_found", "文件不存在", "path")
-        if system_opener and not shutil.which("xdg-open"):
-            raise ApiError(503, "unavailable", "未找到 xdg-open")
-        opener(path if body["mode"] == "file" or path.is_dir() else path.parent)
-        return JSONResponse({"ok": True})
+        try:
+            return JSONResponse(await run_in_threadpool(openers.open, config, body["mode"], path))
+        except desktop.Unavailable as exc:
+            raise ApiError(503, "unavailable", str(exc))
+        except OSError as exc:
+            raise ApiError(503, "unavailable", f"无法启动程序：{exc.strerror or exc}")
+
+    async def list_openers(request):
+        return JSONResponse(await run_in_threadpool(openers.describe, settings.load()))
+
+    async def delete_note(request):
+        root = courses_root(settings.load())
+        candidate = request.query_params.get("path", "")
+        path = library.note_path(root, candidate)
+        active = await run_in_threadpool(sessions.active)
+        if active and active.get("run_id") == path.stem:
+            raise ApiError(409, "active_note", "这是进行中课堂的笔记，结束后才能删除")
+        try:
+            trashed = await run_in_threadpool(trash, root, candidate)
+        except library.TrashUnavailable as exc:
+            raise ApiError(503, "trash_unavailable", str(exc))
+        except library.TrashFailed as exc:
+            raise ApiError(500, "trash_failed", str(exc))
+        return JSONResponse({"ok": True, "trashed": trashed})
 
     async def quit_app(request):
         if on_quit:
@@ -460,8 +490,10 @@ def create_app(port: int, token: str, *, on_quit=None, sessions: Sessions | None
         Route("/api/runs/active/events", events),
         Route("/api/runs/active/{action}", control, methods=["POST"]),
         Route("/api/notes", list_notes),
+        Route("/api/notes", delete_note, methods=["DELETE"]),
         Route("/api/notes/content", note_content),
         Route("/api/open", open_path, methods=["POST"]),
+        Route("/api/openers", list_openers),
         Route("/api/quit", quit_app, methods=["POST"]),
         Route("/api/{rest:path}", unknown_api, methods=["GET", "POST", "PUT", "DELETE"]),
         Mount("/", StaticFiles(directory=STATIC, html=True)),

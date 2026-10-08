@@ -17,6 +17,12 @@ from .. import runs
 from ..asr import QWEN_MODELS
 
 START_TIMEOUT = 15
+# Closing estimate (seconds of closing work per recorded second), used until the registry has history.
+REFINE_RATIO = 0.1
+NOTES_RATIO = 0.05
+MODEL_LOAD_SECONDS = 15
+HISTORY = 5
+ETA_MIN_SECONDS = 5
 TAIL_SEGMENTS = 8
 LOG_TAIL_LINES = 20
 
@@ -93,6 +99,56 @@ class SnapshotCache:
     def __init__(self):
         self.transcript = TranscriptTail()
         self.latest = None
+        self.ratios = None  # History does not change while a session runs; read the registry once.
+
+
+def median(values: list[float]) -> float:
+    values = sorted(values)
+    middle = len(values) // 2
+    return values[middle] if len(values) % 2 else (values[middle - 1] + values[middle]) / 2
+
+
+def closing_ratios(history: list[dict] | None = None) -> dict:
+    """Median closing seconds per recorded second over the latest successful runs, else defaults."""
+    found = {"离线校正": [], "课后笔记": []}
+    for record in records() if history is None else history:
+        audio = number(record.get("audio_seconds"))
+        stages = record.get("stages")
+        flags = record.get("flags") if isinstance(record.get("flags"), dict) else {}
+        if record.get("status") != "done" or audio <= 0 or not isinstance(stages, list):
+            continue
+        for stage in stages:
+            if not isinstance(stage, dict) or stage.get("name") not in found:
+                continue
+            if stage["name"] == "离线校正" and (flags.get("refinement_failed") or flags.get("refinement_skipped")):
+                continue
+            if len(found[stage["name"]]) < HISTORY and number(stage.get("seconds"), -1) >= 0:
+                found[stage["name"]].append(number(stage["seconds"]) / audio)
+    return {"refine": median(found["离线校正"]) if found["离线校正"] else REFINE_RATIO,
+            "notes": median(found["课后笔记"]) if found["课后笔记"] else NOTES_RATIO}
+
+
+def closing_estimate(recorded: float, refine: bool, ratios: dict) -> int:
+    """How long closing would take if the lecture ended now."""
+    seconds = ratios["notes"] * recorded
+    if refine:
+        seconds += ratios["refine"] * recorded + MODEL_LOAD_SECONDS
+    return round(seconds)
+
+
+def refine_progress(state: dict, now: float | None = None) -> tuple[float | None, int | None]:
+    """Fraction of the audio refined, and remaining seconds extrapolated from the speed so far."""
+    done, total = number(state.get("done_seconds"), None), number(state.get("total_seconds"), None)
+    if done is None or not total or total <= 0:
+        return None, None
+    done = min(max(done, 0.0), total)
+    if state.get("complete"):
+        return 1.0, 0
+    started = number(state.get("started"), None)
+    elapsed = (time.time() if now is None else now) - started if started is not None else 0
+    if done < ETA_MIN_SECONDS or elapsed <= 0:
+        return done / total, None
+    return done / total, round((total - done) * elapsed / done)
 
 
 def latest_batch(directory: Path, previous):
@@ -144,18 +200,28 @@ def snapshot(directory: Path, cache: SnapshotCache | None = None) -> dict:
     count = int(number(asr.get("count"), cache.transcript.count))
     enabled = bool(meta.get("refine"))
     output = meta.get("output") if isinstance(meta.get("output"), str) else None
+    phase = controller.get("phase") or "starting"
+    elapsed = number(asr.get("captured", asr.get("seconds")))
+    progress, eta = refine_progress(refine) if enabled else (None, None)
+    estimate = None
+    if phase in ("starting", "recording"):
+        if cache.ratios is None:
+            cache.ratios = closing_ratios()
+        estimate = closing_estimate(elapsed, enabled, cache.ratios)
     return {
         "run_id": runs.run_id(output) if output else None,
         "course": meta.get("course"),
         "output": output,
         "started": meta.get("started"),
-        "phase": controller.get("phase") or "starting",
+        "phase": phase,
         # Wall-clock start of the current phase; the closing screen times the draining step with it.
         "phase_since": number(controller.get("since"), None),
         "input": input_label(meta),
         "paused": (directory / "pause").exists(),
         "can_skip": bool(controller.get("can_skip")),
-        "elapsed_seconds": int(number(asr.get("captured", asr.get("seconds")))),
+        "elapsed_seconds": int(elapsed),
+        # Recording only: "if the lecture ended now, closing would take about this long".
+        "closing_estimate_seconds": estimate,
         "asr": {
             "status": asr.get("status") or "启动中",
             "device_label": device_label(asr, meta),
@@ -185,6 +251,8 @@ def snapshot(directory: Path, cache: SnapshotCache | None = None) -> dict:
             "enabled": enabled,
             "status": (refine.get("status") or asr.get("refinement_warning") or "Qwen 1.7B · 下课后自动重转录") if enabled else None,
             "reason": refine.get("reason"),
+            "progress": progress,
+            "eta_seconds": eta,
         },
         "stages": controller.get("stages") if isinstance(controller.get("stages"), list) else [],
     }

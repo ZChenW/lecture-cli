@@ -87,6 +87,9 @@ $$\\frac{1}{2$$
       { version: "live", first: 12, last: 12, label: "L12", title: "live-L12" });
     expect(citeOf("x.transcript.md#refined-L3", "refined-L3–L9 00:01:00.00–00:02:00.00")?.label).toBe("L3–L9");
     expect(citeOf("https://example.org", "live-L1")).toBeNull();
+    // Links from the main note go through the attachment folder.
+    expect(citeOf("%E5%8E%9F%E6%96%87%E4%B8%8E%E8%AE%B0%E5%BD%95/x.transcript.md#refined-L7", "refined-L7–L9")).toEqual(
+      { version: "refined", first: 7, last: 9, label: "L7–L9", title: "refined-L7–L9" });
   });
 
   it("renders a title line inline", () => {

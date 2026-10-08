@@ -6,7 +6,7 @@ import pytest
 from lecture_cli import final_notes, worker
 from lecture_cli.asr import session_context
 from lecture_cli.glossary import load_glossary, notes_glossary, terminology_warnings
-from lecture_cli.storage import Journal, linked_sources, write_json
+from lecture_cli.storage import ATTACHMENT_DIR, Journal, linked_sources, write_json
 
 
 @pytest.fixture
@@ -48,7 +48,7 @@ def test_topic_continues_across_request_boundary_and_originals_reach_writer(lect
     main = (journal.directory.parent / 'notes.md').read_text()
     assert main.count('**平面同痕**') == 1
     assert '缺少图示' not in main
-    assert '缺少图示' in (journal.directory.parent / 'notes.review.md').read_text()
+    assert '缺少图示' in (journal.directory.parent / ATTACHMENT_DIR / 'notes.review.md').read_text()
     assert 'notes.transcript.md#live-L1' in main
     # Saved plan and chapters allow a render-only resume, with no new model calls.
     final_notes.generate(journal, source, lambda *a: pytest.fail('unexpected API request'))
@@ -62,7 +62,7 @@ def test_invalid_outline_preserves_sources_without_pretending_complete(lecture, 
     final_notes.generate(journal, source, lambda *a: json.dumps(result))
     info = dict(journal.db.execute('SELECT key, value FROM info'))
     assert info['detail_status'] == 'incomplete'
-    assert all(r['text'] in (journal.directory.parent / 'notes.transcript.md').read_text() for r in source)
+    assert all(r['text'] in (journal.directory.parent / ATTACHMENT_DIR / 'notes.transcript.md').read_text() for r in source)
 
 
 def test_live_and_refined_citations_resolve_to_distinct_records(lecture):
@@ -75,13 +75,13 @@ def test_live_and_refined_citations_resolve_to_distinct_records(lecture):
     journal.render(finished=True)
     root = journal.directory.parent
     assert 'notes.transcript.md#refined-L1' in (root / 'notes.md').read_text()
-    assert 'notes.transcript.md#live-L1' in (root / 'notes.live.md').read_text()
-    transcript = (root / 'notes.transcript.md').read_text()
+    assert 'notes.transcript.md#live-L1' in (root / ATTACHMENT_DIR / 'notes.live.md').read_text()
+    transcript = (root / ATTACHMENT_DIR / 'notes.transcript.md').read_text()
     assert all(r['text'] in transcript for r in source)
     assert '<a id="live-L1">' in transcript and '<a id="refined-L1">' in transcript
     assert 'Corrected English.' in transcript
     assert '实时预览' not in (root / 'notes.md').read_text()
-    assert not (root / 'notes.review.md').exists()
+    assert not (root / ATTACHMENT_DIR / 'notes.review.md').exists()
 
 
 def test_citation_must_be_in_supplied_evidence():
@@ -151,7 +151,7 @@ def test_html_comment_cannot_silently_hide_model_review(lecture, response, hidde
         return response
     final_notes.generate(journal, records, api)
     info = dict(journal.db.execute('SELECT key, value FROM info'))
-    review = (journal.directory.parent / 'notes.review.md').read_text()
+    review = (journal.directory.parent / ATTACHMENT_DIR / 'notes.review.md').read_text()
     assert '<!--' not in (journal.directory.parent / 'notes.md').read_text()
     if hidden:
         assert info['detail_status'] == 'incomplete' and '隐藏注释' in review
@@ -171,7 +171,7 @@ def test_neighboring_context_does_not_duplicate_owned_review(lecture):
                         '本主题缺图 [L4]\n\n邻接主题不清楚 [L8]')
     journal.save_detail(source[4:], '## 第二主题\n正文 [L5]\n<!-- REVIEW -->\n'
                         '本主题听不清 [L8 00:00:08–00:00:09]')
-    review = (journal.directory.parent / 'notes.review.md').read_text()
+    review = (journal.directory.parent / ATTACHMENT_DIR / 'notes.review.md').read_text()
     assert '本主题缺图' in review and '本主题听不清' in review
     assert '邻接主题不清楚' not in review
     assert review.count('#live-L8') == 1

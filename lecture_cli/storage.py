@@ -11,6 +11,17 @@ from urllib.parse import quote
 DETAIL_WARNING = "详细笔记未全部完成；已保留完成章节及剩余原始转录。"
 CITATION = re.compile(r"\[L(\d+)(?:[–—-]L?(\d+))?(?: [0-9:.]+[–—-][0-9:.]+)?\](?!\()")
 REVIEW_MARKER = "<!-- REVIEW -->"
+# Attachments live beside the main note in a visible folder; Obsidian hides dot folders.
+ATTACHMENT_DIR = "原文与记录"
+ATTACHMENTS = ("transcript", "live", "review")
+
+
+def attachment_path(output: Path, kind: str) -> Path:
+    return output.parent / ATTACHMENT_DIR / f"{output.stem}.{kind}.md"
+
+
+def legacy_attachment_path(output: Path, kind: str) -> Path:
+    return output.with_suffix(f".{kind}.md")
 
 
 def linked_sources(text: str, filename: str, version: str) -> str:
@@ -182,9 +193,12 @@ class Journal:
         if fallback:
             state += " · 含待整理原文"
         output = Path(self.meta["output"])
-        transcript_path = output.with_suffix(".transcript.md")
-        live_path = output.with_suffix(".live.md")
-        review_path = output.with_suffix(".review.md")
+        transcript_path = attachment_path(output, "transcript")
+        live_path = attachment_path(output, "live")
+        review_path = attachment_path(output, "review")
+        transcript_path.parent.mkdir(exist_ok=True)
+        # Links from the main note go through the attachment folder; attachments link to siblings.
+        main_transcript = f"{ATTACHMENT_DIR}/{transcript_path.name}"
         live_records = events(self.directory)
         refined = refined_events(self.directory)
         version = "refined" if refined is not None else "live"
@@ -225,9 +239,9 @@ class Journal:
             body += "> 演示：自造课堂文字，未录音，不是真实课程记录。\n\n"
         body += f"> {state}。自动课堂笔记；公式和听辨疑点需对照课件核实。\n"
         body += "> 时间为录入音频的相对时间（不含暂停），L 为本次转录片段编号。\n"
-        body += f"\n[原始转录]({quote(transcript_path.name)})"
+        body += f"\n[原始转录]({quote(main_transcript)})"
         if live:
-            body += f" · [随堂记录]({quote(live_path.name)})"
+            body += f" · [随堂记录]({quote(f'{ATTACHMENT_DIR}/{live_path.name}')})"
         body += "\n"
         if refined is not None:
             body += "> 详细笔记依据 Qwen 离线重转录；live/refined 编号独立，时间戳为音频段范围。\n"
@@ -240,7 +254,7 @@ class Journal:
             for topic in json.loads(info["outline"]):
                 body += linked_sources(
                     f"- **{topic['title']}**：{topic['question']} [L{topic['first']}–L{topic['last']}]\n",
-                    transcript_path.name, version)
+                    main_transcript, version)
         details = self.db.execute("SELECT first_id, last_id, body, fallback FROM details ORDER BY first_id").fetchall()
         if details:
             label = "详细课堂笔记" if info.get("detail_status") == "complete" else "详细课堂笔记（未全部完成）"
@@ -252,12 +266,12 @@ class Journal:
                     continue
                 # Shift headings uniformly, retaining their relative hierarchy.
                 chapter = re.sub(r"(?m)^(#{1,6})\s+", lambda m: '#' * min(6, len(m[1]) + 1) + ' ', chapter)
-                body += "\n" + linked_sources(chapter, transcript_path.name, version) + "\n"
+                body += "\n" + linked_sources(chapter, main_transcript, version) + "\n"
         elif not info.get("finished"):
-            body += "\n## 随堂预览\n\n" + linked_sources(live or "尚无已整理内容。", transcript_path.name, "live") + "\n"
+            body += "\n## 随堂预览\n\n" + linked_sources(live or "尚无已整理内容。", main_transcript, "live") + "\n"
         if review:
             atomic_text(review_path, "# 待核对与处理记录\n\n" + "\n\n".join(review) + "\n")
-            body += f"\n[待核对与处理记录]({quote(review_path.name)})\n"
+            body += f"\n[待核对与处理记录]({quote(f'{ATTACHMENT_DIR}/{review_path.name}')})\n"
         elif review_path.exists():
             review_path.unlink()
         atomic_text(output, body)

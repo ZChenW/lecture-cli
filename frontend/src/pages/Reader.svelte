@@ -142,7 +142,7 @@
   async function openElsewhere() {
     openError = "";
     try {
-      await api.open(path, "file");
+      await api.open(path, "editor");
     } catch (e) {
       openError = message(e);
     }

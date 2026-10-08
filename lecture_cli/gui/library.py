@@ -3,8 +3,12 @@ from __future__ import annotations
 
 from pathlib import Path
 import re
+import shutil
+import subprocess
 
-ATTACHMENTS = ("transcript", "live", "review")
+from ..storage import ATTACHMENTS, attachment_path, legacy_attachment_path
+
+TRASH_TIMEOUT = 30
 # 2026-10-07_143000-课堂笔记-a1b2c3, as written by cli.session().
 NOTE_NAME = re.compile(r"^(\d{4}-\d{2}-\d{2})_(\d{2})(\d{2})(\d{2})-(.+)-[0-9a-f]{6}$")
 
@@ -14,6 +18,14 @@ class Forbidden(ValueError):
 
 
 class NotFound(LookupError):
+    pass
+
+
+class TrashUnavailable(RuntimeError):
+    """gio is missing: notes are never deleted permanently instead."""
+
+
+class TrashFailed(RuntimeError):
     pass
 
 
@@ -42,11 +54,24 @@ def is_attachment(path: Path) -> bool:
     return path.stem.endswith(tuple(f".{kind}" for kind in ATTACHMENTS))
 
 
+def attachment_files(path: Path, kind: str) -> list[Path]:
+    """This note's attachment of one kind: the 原文与记录 folder first, then the older flat layout."""
+    found = []
+    for candidate in (attachment_path(path, kind), legacy_attachment_path(path, kind)):
+        if not candidate.parent.is_symlink() and not candidate.is_symlink() and candidate.is_file():
+            found.append(candidate)
+    return found
+
+
+def attachment_file(path: Path, kind: str) -> Path | None:
+    return next(iter(attachment_files(path, kind)), None)
+
+
 def note_entry(path: Path) -> dict:
     match = NOTE_NAME.match(path.stem)
     started = f"{match[1]}T{match[2]}:{match[3]}:{match[4]}" if match else None
     return {"name": path.name, "path": str(path), "started": started, "kind": match[5] if match else None,
-            "attachments": {kind: path.with_suffix(f".{kind}.md").is_file() for kind in ATTACHMENTS}}
+            "attachments": {kind: attachment_file(path, kind) is not None for kind in ATTACHMENTS}}
 
 
 def notes(root, course: Path) -> list[dict]:
@@ -94,7 +119,31 @@ def content(root, candidate) -> dict:
     path = note_path(root, candidate)
     result = {"main": path.read_text(errors="replace")}
     for kind in ATTACHMENTS:
-        attachment = path.with_suffix(f".{kind}.md")
-        if attachment.is_file() and not attachment.is_symlink():
-            result[kind] = attachment.read_text(errors="replace")
+        attachment = attachment_file(path, kind)
+        if attachment is not None:
+            result[kind] = inside(root, attachment).read_text(errors="replace")
     return result
+
+
+def trash_note(root, candidate, *, which=shutil.which, run=subprocess.run) -> list[str]:
+    """Move a note and its attachments (both layouts) to the desktop trash; never delete outright."""
+    unresolved = Path(candidate).expanduser() if isinstance(candidate, str) else Path()
+    if isinstance(candidate, str) and not unresolved.is_absolute():
+        unresolved = Path(root).expanduser().resolve() / unresolved
+    path = note_path(root, candidate)
+    if unresolved.is_symlink():
+        raise Forbidden("不能删除指向其他文件的链接")
+    if not which("gio"):
+        raise TrashUnavailable("未找到 gio，无法移到回收站；为免永久删除，未做任何改动。")
+    # Attachments first: the main note never outlives the files it links to.
+    targets = [inside(root, item) for kind in ATTACHMENTS for item in attachment_files(path, kind)] + [path]
+    try:
+        result = run(["gio", "trash", "--", *map(str, targets)], stdin=subprocess.DEVNULL,
+                     capture_output=True, text=True, timeout=TRASH_TIMEOUT)
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise TrashFailed(f"移到回收站失败：{exc}") from exc
+    if result.returncode != 0:
+        remaining = [str(item) for item in targets if item.exists()]
+        raise TrashFailed("移到回收站失败：" + ((result.stderr or "").strip() or f"gio 退出码 {result.returncode}")
+                          + ("；仍在原处：" + "、".join(remaining) if remaining else ""))
+    return [str(item) for item in targets]

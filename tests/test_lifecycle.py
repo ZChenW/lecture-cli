@@ -12,6 +12,7 @@ from pathlib import Path
 import pytest
 
 from lecture_cli import runs
+from lecture_cli.storage import attachment_path
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -113,12 +114,12 @@ def test_sigterm_drains_capture_preserves_note_cleans_tmp(stub_runtime, outage):
         assert proc.returncode == 0, stdout
         assert not directory.exists()
         files = list((root / "MATH421" / "LectureNotes").iterdir())
-        note_path = next(p for p in files if not p.stem.endswith(('.transcript', '.live', '.review')))
+        note_path = next(p for p in files if p.is_file() and not p.stem.endswith(('.transcript', '.live', '.review')))
         note = note_path.read_text()
-        assert 'These are the final words.' in note_path.with_suffix('.transcript.md').read_text()
+        assert 'These are the final words.' in attachment_path(note_path, 'transcript').read_text()
         assert "已结束" in note
         if outage:
-            assert "待整理原文" in note_path.with_suffix('.review.md').read_text()
+            assert "待整理原文" in attachment_path(note_path, 'review').read_text()
             assert "详细笔记未全部完成" in stdout
         else:
             assert "L1–L2" in note
@@ -151,7 +152,7 @@ def test_sigkill_ends_children_and_next_launch_recovers_stale_session(stub_runti
         assert not directory.exists()
         note = Path(meta["output"]).read_text()
         assert "异常中断" in note
-        assert "An eigenvector is nonzero." in Path(meta['output']).with_suffix('.transcript.md').read_text()
+        assert "An eigenvector is nonzero." in attachment_path(Path(meta['output']), 'transcript').read_text()
     finally:
         if proc.poll() is None:
             proc.kill()
@@ -204,7 +205,7 @@ def test_unwritable_output_preserves_tmp_until_recovery(stub_runtime, blocked):
         target = root / "MATH421" / "LectureNotes"
         moved = root / "MATH421" / "moved-notes"
         meta = json.loads((directory / 'session.json').read_text())
-        attachment = Path(meta['output']).with_suffix('.transcript.md')
+        attachment = attachment_path(Path(meta['output']), 'transcript')
         saved_attachment = attachment.with_suffix('.saved')
         if blocked == 'directory':
             target.rename(moved)
@@ -356,7 +357,8 @@ def test_headless_demo_without_terminal_records_phases_and_run(stub_runtime, tmp
     note = Path(record["output"])
     assert record["run_id"] == note.stem and record["course"] == "MATH421"
     assert record["status"] == "done" and record["exit_code"] == 0 and record["workspace_kept"] is None
-    assert record["flags"] == {"refinement_failed": False, "has_fallback": False, "detail_incomplete": False}
+    assert record["flags"] == {"refinement_failed": False, "refinement_skipped": False, "has_fallback": False,
+                              "detail_incomplete": False}
     assert [stage["name"] for stage in record["stages"]] == ["录制与转录", "课后笔记"]
     assert not Path(record["directory"]).exists() and "已结束" in note.read_text()
     text = json.dumps(record, ensure_ascii=False)
@@ -398,7 +400,7 @@ def test_headless_start_follows_pause_and_stop_sentinels(stub_runtime, isolated_
         assert not directory.exists()
         record = only_record(isolated_run_registry)
         assert record["status"] == "done" and "These are the final words." in \
-            Path(record["output"]).with_suffix(".transcript.md").read_text()
+            attachment_path(Path(record["output"]), "transcript").read_text()
     finally:
         if proc.poll() is None:
             proc.kill()
@@ -434,7 +436,7 @@ def test_controller_state_write_failures_never_block_draining(stub_runtime, tmp_
     assert [stage["name"] for stage in record["stages"]] == ["录制与转录", "课后笔记"]
     note = Path(record["output"])
     # The final words arrive only while draining, after stop.
-    assert "These are the final words." in note.with_suffix(".transcript.md").read_text()
+    assert "These are the final words." in attachment_path(note, "transcript").read_text()
     assert "已结束" in note.read_text() and "L1–L2" in note.read_text()
 
 
@@ -462,7 +464,7 @@ def test_unreadable_registry_record_never_changes_exit_code(stub_runtime, isolat
     note = next(p for p in (root / "MATH421" / "LectureNotes").glob("*.md")
                 if not p.stem.endswith((".transcript", ".live", ".review")))
     assert "已结束" in note.read_text()
-    assert "These are the final words." in note.with_suffix(".transcript.md").read_text()
+    assert "These are the final words." in attachment_path(note, "transcript").read_text()
 
 def test_headless_requires_course_name(stub_runtime):
     root, env = stub_runtime

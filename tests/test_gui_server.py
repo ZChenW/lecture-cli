@@ -24,7 +24,9 @@ import uvicorn
 from lecture_cli import runs
 from lecture_cli.checks import Check
 from lecture_cli.gui import server as gui_server
+from lecture_cli.openers import Openers
 from lecture_cli.gui.sessions import Sessions, TranscriptTail, command, records, snapshot
+from lecture_cli.storage import attachment_path
 
 ROOT = Path(__file__).resolve().parents[1]
 TOKEN = "test-token-" + "x" * 32
@@ -311,9 +313,22 @@ def write_note(course, stem="2026-10-07_143000-课堂笔记-a1b2c3", attachments
     return folder / f"{stem}.md"
 
 
+def fake_openers(installed=("nautilus", "kitty", "code", "gdbus"), dbus=True):
+    """Nothing is ever launched: spawned argv lists and D-Bus calls are only recorded."""
+    calls = {"spawn": [], "dbus": []}
+
+    def call(argv):
+        calls["dbus"].append(argv)
+        return dbus
+
+    openers = Openers(which=lambda name: f"/usr/bin/{name}" if name in installed else None,
+                      spawn=lambda argv, cwd: calls["spawn"].append((argv, cwd)), call=call)
+    return openers, calls
+
+
 def test_paths_outside_courses_dir_are_forbidden(home, serve, tmp_path):
-    opened = []
-    app = serve(opener=opened.append)
+    openers, calls = fake_openers(dbus=False)
+    app = serve(openers=openers)
     app.login()
     save_config(home)
     note = write_note(home / "MATH421")
@@ -329,14 +344,15 @@ def test_paths_outside_courses_dir_are_forbidden(home, serve, tmp_path):
                  str(home / "MATH421" / "LectureNotes" / "linked.md"), str(home / "LINKED" / "LectureNotes" / "secret.md")):
         response = app.client.get("/api/notes/content", params={"path": path})
         assert response.status_code == 403 and "SECRET" not in response.text
-        assert app.post("/api/open", {"path": path, "mode": "file"}).status_code == 403
+        for mode in ("reveal", "terminal", "editor"):
+            assert app.post("/api/open", {"path": path, "mode": mode}).status_code == 403
     for course in ("LINKED", "../outside"):
         assert app.client.get("/api/notes", params={"course": course}).status_code == 403
     (outside / "context.txt").write_text("background")
     escape = app.post("/api/runs", {"course": "MATH421", "overrides": {"context_path": str(outside / "context.txt")}})
     assert escape.status_code == 403
-    assert app.post("/api/open", {"path": str(note), "mode": "folder"}).json() == {"ok": True}
-    assert opened == [note.parent]
+    assert app.post("/api/open", {"path": str(note), "mode": "reveal"}).json() == {"ok": True, "via": "file_manager"}
+    assert calls["spawn"] == [(["nautilus", str(note.parent)], note.parent)]
 
 
 def test_courses_and_notes_listing(home, serve):
@@ -400,6 +416,7 @@ def test_demo_session_through_the_api(controller_env, serve, isolated_run_regist
     assert kinds[0] == "snapshot" and kinds[-1] == "finished" and kinds.count("finished") == 1
     finished = collected[-1][1]
     assert finished["status"] == "done" and finished["exit_code"] == 0 and finished["run_id"] == run["run_id"]
+    assert finished["audio_seconds"] == 2  # From the capture state, for later closing estimates.
     phases = [data["phase"] for event, data in collected if event == "snapshot"]
     assert phases[0] == "recording" and set(phases) <= {"recording", "draining", "finalizing", "saving"}
 
@@ -407,7 +424,7 @@ def test_demo_session_through_the_api(controller_env, serve, isolated_run_regist
     assert app.post("/api/runs/active/stop").status_code == 404
     assert app.client.get("/api/runs").json()[0]["status"] == "done"
     note = Path(finished["output"])
-    assert "These are the final words." in note.with_suffix(".transcript.md").read_text()
+    assert "These are the final words." in attachment_path(note, "transcript").read_text()
     assert "已结束" in note.read_text()
     # The failed end page (M6) reads the tail of this log.
     logs = list(isolated_run_registry.glob("*-controller.log"))
@@ -480,7 +497,8 @@ def test_snapshot_tolerates_missing_and_partial_state_files(tmp_path):
     assert empty["asr"]["status"] == "启动中" and empty["asr"]["device_label"] is None
     assert empty["transcript"] == {"count": 0, "tail": [], "pending": ""}
     assert empty["notes"]["worker_alive"] is None and empty["notes"]["latest"] is None
-    assert empty["refine"] == {"enabled": False, "status": None, "reason": None} and empty["stages"] == []
+    assert empty["refine"] == {"enabled": False, "status": None, "reason": None, "progress": None,
+                              "eta_seconds": None} and empty["stages"] == []
     assert empty["phase_since"] is None and empty["input"] == "系统默认"
 
     write_state(tmp_path, "session.json", "{\"course\": ")

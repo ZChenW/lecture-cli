@@ -71,7 +71,8 @@ export interface Snapshot {
   };
   transcript: { count: number; tail: { id: number; start: string; end: string; text: string }[]; pending: string };
   notes: { status: string; worker_alive: boolean | null; unprocessed_segments: number; updated: number | null; latest: string | null };
-  refine: { enabled: boolean; status: string | null; reason: string | null };
+  refine: { enabled: boolean; status: string | null; reason: string | null; progress?: number | null; eta_seconds?: number | null };
+  closing_estimate_seconds?: number | null;
   stages: Stage[];
 }
 
@@ -79,6 +80,7 @@ export interface RunRecord {
   run_id: string; course: string; output: string; status: string; exit_code?: number;
   warnings?: string[]; log?: string | null; log_tail?: string; workspace_kept?: string | null;
   stages?: { name: string; seconds: number }[]; started?: string | null;
-  flags?: { refinement_failed: boolean; has_fallback: boolean; detail_incomplete: boolean };
+  flags?: { refinement_failed: boolean; refinement_skipped?: boolean; has_fallback: boolean; detail_incomplete: boolean };
+  audio_seconds?: number | null;
   [key: string]: unknown;
 }

@@ -53,6 +53,12 @@ describe("parseNote", () => {
     expect(note.body).toBe("## 随堂预览\n\n尚无已整理内容。");
   });
 
+  it("hides attachment lines that point into the 原文与记录 folder", () => {
+    const dir = "%E5%8E%9F%E6%96%87%E4%B8%8E%E8%AE%B0%E5%BD%95/";
+    const main = `# M · 2026-10-07T09:02:00-04:00\n\n> 已结束。\n\n[原始转录](${dir}x.transcript.md) · [随堂记录](${dir}x.live.md)\n\n## 课后梳理\n\n要点。\n\n[待核对与处理记录](${dir}x.review.md)\n`;
+    expect(parseNote(main, "M").body).toBe("## 课后梳理\n\n要点。");
+  });
+
   it("copes with a file that has no sections at all", () => {
     const note = parseNote("随便写的一行", "X");
     expect(note.body).toBe("");

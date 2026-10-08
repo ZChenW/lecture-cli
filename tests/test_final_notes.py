@@ -5,7 +5,7 @@ import time
 import pytest
 
 from lecture_cli import final_notes, worker
-from lecture_cli.storage import Journal, read_json, write_json
+from lecture_cli.storage import ATTACHMENT_DIR, Journal, read_json, write_json
 
 
 @pytest.fixture(autouse=True)
@@ -56,7 +56,7 @@ def test_all_original_source_including_late_lecture_reaches_detailed_requests(le
     assert '## 学习路线' in text and '## 随堂记录' not in text
     assert '#### 详细概念' in text and '##### 例题' in text
     assert 'Deliberately incomplete live summary' not in text
-    assert 'Deliberately incomplete live summary' in (directory.parent / 'notes.live.md').read_text()
+    assert 'Deliberately incomplete live summary' in (directory.parent / ATTACHMENT_DIR / 'notes.live.md').read_text()
     journal.close()
 
 
@@ -78,8 +78,8 @@ def test_midway_api_failure_retains_successful_chapter_and_all_remaining_origina
     text = (directory.parent / 'notes.md').read_text()
     assert '已完成章节' in text and '未全部完成' in text and '一次音频丢帧' in text
     for record in records[len(chunks[0]):]:
-        assert record['text'].strip() in (directory.parent / 'notes.transcript.md').read_text()
-    assert 'truncated or offline' in (directory.parent / 'notes.review.md').read_text()
+        assert record['text'].strip() in (directory.parent / ATTACHMENT_DIR / 'notes.transcript.md').read_text()
+    assert 'truncated or offline' in (directory.parent / ATTACHMENT_DIR / 'notes.review.md').read_text()
     assert len(calls) == 2
     assert journal.detail_cursor == records[-1]['id']
     journal.close()
@@ -115,7 +115,7 @@ def test_controller_recovery_preserves_raw_details_already_compressed_in_live_no
     journal.add_warning('capture warning')
     journal.render(finished=True)
     text = (directory.parent / 'notes.md').read_text()
-    transcript = (directory.parent / 'notes.transcript.md').read_text()
+    transcript = (directory.parent / ATTACHMENT_DIR / 'notes.transcript.md').read_text()
     assert all(record['text'].strip() in transcript for record in records)
     assert '详细笔记未全部完成' in text and 'capture warning' in text
     journal.close()

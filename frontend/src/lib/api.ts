@@ -76,7 +76,7 @@ export const api = {
   runs: () => get<RunRecord[]>("/api/runs"),
   notes: (course: string) => get<Note[]>(`/api/notes?${query({ course })}`),
   noteContent: (path: string) => get<Record<string, string>>(`/api/notes/content?${query({ path })}`),
-  open: (path: string, mode: "file" | "folder") => send<{ ok: boolean }>("POST", "/api/open", { path, mode }),
+  open: (path: string, mode: "reveal" | "terminal" | "editor") => send<{ ok: boolean }>("POST", "/api/open", { path, mode }),
   quit: () => send<{ ok: boolean }>("POST", "/api/quit"),
 };
 

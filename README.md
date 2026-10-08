@@ -285,6 +285,21 @@ lecture diagnose-asr MATH421 --audio-file /path/to/sample.wav --seconds 60
 | `refine_model` | str | `"qwen3-asr-1.7b"` | 课后校正模型：`qwen3-asr-1.7b` 或 `qwen3-asr-0.6b` |
 | `auto_gain` | bool | `true` | 自动降低削波的默认麦克风音量 |
 | `qwen_python` | str 或 null | `null` | Qwen 环境的 Python 路径；`null` 时用项目里的 `.venv-qwen` |
+| `file_manager` | str 或 null | `null` | 图形界面“在文件夹中显示”的回退文件管理器：`nautilus`、`dolphin`、`thunar`、`nemo`、`caja`、`pcmanfm`；`null` 为按此顺序第一个已安装的 |
+| `terminal` | str 或 null | `null` | “在终端打开”所用终端：`kitty`、`ghostty`、`alacritty`、`foot`、`wezterm`、`gnome-terminal`、`konsole`、`xfce4-terminal`；`null` 同上 |
+| `editor` | str 或 null | `null` | “用编辑器打开”所用编辑器：`code`、`codium`、`zed`、`obsidian`、`gnome-text-editor`、`kate`、`gedit`、`mousepad`；`null` 同上 |
+| `course_settings` | object | `{}` | 每门课记住的设置，目前只有语言：`{"MATH421": {"language": "zh"}}` |
+
+`lecture start` 的课堂语言依次取：命令行 `--language`、该课程在 `course_settings` 里记住的语言、全局 `language`。从图形界面开始上课时，所选语言会写回该课程。课程名不在 `course_settings` 里时直接用全局值。
+
+**在其他程序中打开**：图形界面只提供三种打开方式，“在文件夹中显示”（先通过 D-Bus 的 `org.freedesktop.FileManager1.ShowItems` 让桌面文件管理器选中该文件，失败时由 `file_manager` 打开所在文件夹）、“在终端打开”（`terminal`，工作目录为所在文件夹）和“用编辑器打开”（`editor`）。程序只能从上表的固定名单中选；界面和接口都不接受任意命令，也不经过 shell。名单外的程序只能手工在 `config.json` 中写 `file_manager_command`、`terminal_command` 或 `editor_command`，值为参数数组，每项一个参数，`{path}` 换成文件的完整路径、`{dir}` 换成所在文件夹；两者都没写时把目标追加在末尾。写了 `*_command` 时它优先于同名选项。例如：
+
+```json
+{
+  "terminal_command": ["footclient", "--working-directory={dir}"],
+  "editor_command": ["emacsclient", "-c", "-n", "{path}"]
+}
+```
 
 key 不写进 `config.json`。笔记 key 依次读取环境变量 `LECTURE_NOTES_API_KEY`、旧变量 `DEEPSEEK_API_KEY`、配置目录里的 `notes-api-key` 文件、旧文件 `api-key`；转录 key 依次读取 `LECTURE_ASR_API_KEY`、`asr-api-key` 文件。图形界面和 `lecture setup` 写入的 key 文件权限为 600。两个 key 分别只传给笔记进程和转录进程。
 
@@ -370,12 +385,19 @@ key 不写进 `config.json`。笔记 key 依次读取环境变量 `LECTURE_NOTES
 ```text
 <课程目录>/MATH421/LectureNotes/
 ├── 2026-09-14_143000-课堂笔记-a1b2c3.md
-├── 2026-09-14_143000-课堂笔记-a1b2c3.transcript.md
-├── 2026-09-14_143000-课堂笔记-a1b2c3.live.md
-└── 2026-09-14_143000-课堂笔记-a1b2c3.review.md
+└── 原文与记录/
+    ├── 2026-09-14_143000-课堂笔记-a1b2c3.transcript.md
+    ├── 2026-09-14_143000-课堂笔记-a1b2c3.live.md
+    └── 2026-09-14_143000-课堂笔记-a1b2c3.review.md
 ```
 
-每次录制生成唯一主文件及同名附件。录制中主文件显示随堂预览；结束后阅读入口是学习路线与主题正文，随堂记录移到 `.live.md`。`.transcript.md` 保存完整实时原文，以及成功时的离线版本；`.review.md` 仅在有疑点或处理失败时生成。没有随堂内容时不生成 `.live.md`。**请在其他文件里写自己的补充**，这些程序管理的文件会自动重写。
+每次录制生成唯一主文件，同名附件放在 `LectureNotes/原文与记录/` 子文件夹（不以点开头，Obsidian 等工具能看到）；主文件里指向附件的链接都带这一层路径并做 URL 编码，附件之间的链接指向同一文件夹。录制中主文件显示随堂预览；结束后阅读入口是学习路线与主题正文，随堂记录移到 `.live.md`。`.transcript.md` 保存完整实时原文，以及成功时的离线版本；`.review.md` 仅在有疑点或处理失败时生成。没有随堂内容时不生成 `.live.md`。**请在其他文件里写自己的补充**，这些程序管理的文件会自动重写。
+
+旧版本保存的笔记附件与主文件并列（`LectureNotes/<名称>.transcript.md` 等），不会被移动或改名；图形界面先在 `原文与记录/` 找附件，找不到再找旧位置。旧版本中断、升级后才恢复的会话按新布局写附件。
+
+录制中可以放弃本次记录（会话目录中出现 `discard` 标记；图形界面通过 `POST /api/runs/active/discard`）：立即结束子进程，不做收尾、不生成笔记，只删除本次的主文件和三个附件（按完整文件名精确匹配，以及原子写入中断时留下的同名临时文件），清理 `/tmp` 会话，运行登记记为 `discarded`，退出码 0。本次新建且已空的 `LectureNotes/`、`原文与记录/` 文件夹一并删除。放弃只在录制阶段有效；下课收尾开始后的放弃请求会被忽略，照常保存。
+
+图形界面删除笔记时，主文件及其附件（新旧两种位置）通过 `gio trash` 移到回收站，从不直接永久删除；没有 `gio` 时拒绝删除。进行中课堂的笔记不能删除。
 
 详细笔记重新读取本次完整原始转录（课后校正成功时使用离线版本，否则使用实时版本），保留定义与条件、老师讲出的推导步骤、例题、反例、问答、重点及作业安排，按知识结构组织中文 Markdown 并保留英文术语、公式和来源编号。不会仅对随堂摘要再次压缩，也不会补造缺失板书或课外推导。
 

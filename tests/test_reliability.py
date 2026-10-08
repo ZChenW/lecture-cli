@@ -7,7 +7,7 @@ import pytest
 from lecture_cli import worker
 from lecture_cli.capture import Transcript
 from lecture_cli.cli import course_paths, preserve_tail, select_course
-from lecture_cli.storage import Journal, events, normalize_markdown, write_json
+from lecture_cli.storage import ATTACHMENT_DIR, Journal, events, normalize_markdown, write_json
 
 
 @pytest.fixture
@@ -109,7 +109,7 @@ def test_api_outage_at_stop_keeps_unprocessed_text_in_final_note(session, monkey
     monkeypatch.setattr(worker, "complete", lambda *a: (_ for _ in ()).throw(worker.APIError("offline")))
     assert worker.run(session) == 0
     text = (session.parent / "notes.md").read_text()
-    assert "Keep this evidence." in (session.parent / 'notes.transcript.md').read_text()
+    assert "Keep this evidence." in (session.parent / ATTACHMENT_DIR / 'notes.transcript.md').read_text()
     assert "含待整理原文" in text and "已结束" in text
 
 
@@ -126,7 +126,7 @@ def test_capture_gap_warning_survives_final_summary_failure(session, monkeypatch
     text = (session.parent / "notes.md").read_text()
     assert warning in text
     assert "详细笔记未全部完成" in text
-    assert "特征向量非零" in (session.parent / 'notes.live.md').read_text()
+    assert "特征向量非零" in (session.parent / ATTACHMENT_DIR / 'notes.live.md').read_text()
 
 
 def test_producer_can_append_while_api_waits_and_worker_drains_last_batch(session, monkeypatch):

@@ -10,8 +10,8 @@ import numpy as np
 import pytest
 
 from lecture_cli import refinement, final_notes
-from lecture_cli.storage import Journal, events, final_events, read_json, write_json
 from lecture_cli.worker import APIError
+from lecture_cli.storage import ATTACHMENT_DIR, Journal, attachment_path, events, final_events, read_json, write_json
 
 
 def session(root):
@@ -83,7 +83,7 @@ def test_corrected_source_reaches_final_notes_and_controller_recovery(tmp_path):
     journal.render(finished=True)
     assert "24 AC" not in calls[0]
     assert "minus four ac corrected" in calls[0]
-    assert "minus four ac corrected" in (tmp_path / "notes.transcript.md").read_text()
+    assert "minus four ac corrected" in (tmp_path / ATTACHMENT_DIR / "notes.transcript.md").read_text()
     assert "编号独立" in (tmp_path / "notes.md").read_text()
     journal.close()
 
@@ -216,15 +216,20 @@ if "_worker" in sys.argv:
     note_path = next(p for p in (courses / "MATH421" / "LectureNotes").glob("*.md")
                      if not p.stem.endswith((".live", ".review", ".transcript")))
     note = note_path.read_text()
-    assert "LIVE_SOURCE" in note_path.with_suffix('.transcript.md').read_text()
+    assert "LIVE_SOURCE" in attachment_path(note_path, 'transcript').read_text()
+    skipped = mode in ("cancel", "skip")
+    # A user skip is reported as skipped, never as a failure; the two flags exclude each other.
+    failed = fail and not skipped
     assert ("CORRECTED_SOURCE" in note) is not fail
-    assert (refinement.WARNING in note) is fail
-    if mode in ("cancel", "skip"):
-        assert "用户跳过" in note_path.with_suffix('.review.md').read_text()
+    assert (refinement.WARNING in note) is failed and (refinement.SKIPPED in note) is skipped
+    if skipped:
+        assert "用户跳过" in attachment_path(note_path, 'review').read_text()
     record = json.loads(next(isolated_run_registry.glob("*.json")).read_text())
-    assert record["status"] == "done" and record["flags"]["refinement_failed"] is fail
+    assert record["status"] == "done" and record["flags"]["refinement_failed"] is failed
+    assert record["flags"]["refinement_skipped"] is skipped
     assert [stage["name"] for stage in record["stages"]] == ["录制与转录", "离线校正", "课后笔记"]
-    assert (refinement.WARNING in record["warnings"]) is fail
+    assert (refinement.WARNING in record["warnings"]) is failed
+    assert (refinement.SKIPPED in record["warnings"]) is skipped
     if mode == "unobserved":
         # Every phase, including the refinement wait, tried to publish and failed harmlessly.
         assert {"starting", "recording", "draining", "refining", "finalizing", "saving"} <= \

@@ -87,3 +87,10 @@ def mark_recovered(meta: dict) -> None:
     identifier = run_id(meta["output"])
     if record_path(identifier).exists():
         update(identifier, status="recovered", finished=now())
+
+
+def mark_discarded(meta: dict) -> None:
+    """A later lecture command finished a discard its controller could not complete."""
+    identifier = run_id(meta["output"])
+    if record_path(identifier).exists():
+        update(identifier, status="discarded", exit_code=0, finished=now())

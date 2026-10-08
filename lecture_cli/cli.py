@@ -25,7 +25,8 @@ from rich.panel import Panel
 from rich.table import Table
 from rich.text import Text
 
-from .storage import Journal, events, final_events, refined_events, read_json, write_json
+from .storage import (ATTACHMENT_DIR, ATTACHMENTS, Journal, attachment_path, events, final_events,
+                      refined_events, read_json, write_json)
 from .audio_buffer import drain_timeout
 from .asr import QWEN_MODELS, asr_models, resolve_asr_model, capture_python, capture_environment
 from .glossary import load_glossary
@@ -40,6 +41,42 @@ NO_COURSES_DIR = "尚未设置课程目录，请运行 lecture setup 或 lecture
 FALLBACK_NOTICE = "部分内容未完成笔记服务整理，已作为“待整理原文”保存在笔记中。"
 DETAIL_NOTICE = "详细笔记未全部完成；已完成章节及剩余原文已保存在笔记中。"
 REGISTRY_UNAVAILABLE = "运行登记暂不可用，已跳过更新；笔记不受影响。"
+DISCARDED = "已放弃本次记录：本次笔记、附件与临时文件均已删除。"
+TEMP_SUFFIX = 8  # tempfile.mkstemp's random part in storage.atomic_text names.
+
+
+class Discarded(Exception):
+    """The user discarded the lecture while it was still recording."""
+
+
+def discard_requested(directory: Path) -> bool:
+    # Only honoured while recording; the controller withdraws the sentinel once closing begins.
+    return (directory / "discard").exists() and \
+        read_json(directory / "controller-state.json").get("phase") == "recording"
+
+
+def discard_outputs(output: Path) -> list[str]:
+    """Delete exactly this run's note and attachments; returns paths that could not be removed."""
+    failed = []
+    for path in [output] + [attachment_path(output, kind) for kind in ATTACHMENTS]:
+        try:
+            names = os.listdir(path.parent)
+        except FileNotFoundError:
+            continue
+        except OSError:
+            failed.append(str(path))
+            continue
+        # An interrupted atomic write leaves ".<exact name>.<8 random chars>" beside its target.
+        prefix = f".{path.name}."
+        for name in names:
+            if name == path.name or (name.startswith(prefix) and len(name) == len(prefix) + TEMP_SUFFIX):
+                try:
+                    (path.parent / name).unlink()
+                except FileNotFoundError:
+                    pass
+                except OSError:
+                    failed.append(str(path.parent / name))
+    return failed
 
 
 # Thin forwards: tests, scripts and completion still import these from cli.
@@ -81,6 +118,19 @@ def reap_stale_sessions() -> None:
                         break
                     time.sleep(0.05)
                 if any(still_running(pid) for pid in meta.get("children", [])):
+                    continue
+                if discard_requested(directory):
+                    # The controller died while discarding: finish the discard, never recover.
+                    failed = discard_outputs(Path(meta["output"]))
+                    shutil.rmtree(directory)
+                    if failed:
+                        console.print("以下文件未能删除：" + "、".join(failed), style="yellow", markup=False)
+                    else:
+                        console.print(f"已完成上次放弃的记录的清理：{meta['output']}", markup=False)
+                    try:
+                        runs.mark_discarded(meta)
+                    except OSError:
+                        console.print(REGISTRY_UNAVAILABLE, style="yellow", markup=False)
                     continue
                 preserve_tail(directory)
                 journal = Journal(directory)
@@ -235,7 +285,14 @@ def session(args, config: dict, course: Path) -> int:
     output_dir = course / "LectureNotes"
     if output_dir.is_symlink():
         raise ValueError("LectureNotes 不能是指向其他目录的符号链接")
+    created_dirs = [] if output_dir.exists() else [output_dir]
     output_dir.mkdir(exist_ok=True)
+    attachment_dir = output_dir / ATTACHMENT_DIR
+    if attachment_dir.is_symlink():
+        raise ValueError(f"{ATTACHMENT_DIR} 不能是指向其他目录的符号链接")
+    if not attachment_dir.exists():
+        created_dirs.insert(0, attachment_dir)
+    attachment_dir.mkdir(exist_ok=True)
     now = datetime.now().astimezone()
     suffix = "演示笔记" if args.command == "demo" else "课堂笔记"
     output = output_dir / f"{now:%Y-%m-%d_%H%M%S}-{suffix}-{uuid.uuid4().hex[:6]}.md"
@@ -265,6 +322,9 @@ def session(args, config: dict, course: Path) -> int:
     has_fallback = False
     detail_incomplete = False
     refinement_failed = False
+    refinement_skipped = False
+    discarded = False
+    audio_seconds = None
     persisted = False
     completed = False
     warnings = []
@@ -291,21 +351,28 @@ def session(args, config: dict, course: Path) -> int:
         except OSError:
             # Only observers read this file: a full /tmp must never cost the drain or the save.
             controller["paused"] = None  # Retry on the next tick, in case space frees up.
+        if phase and phase != "recording":
+            # Discarding is only possible while recording; once closing begins a late request is
+            # withdrawn (after the new phase is visible, so a racing request cannot outlive it).
+            with contextlib.suppress(OSError):
+                (directory / "discard").unlink(missing_ok=True)
 
     def finish_run(identifier, kept):
-        from .refinement import WARNING
+        from .refinement import WARNING, SKIPPED
         marks = stages if not stages[-1][0] else stages + [("", time.monotonic())]
-        notices = warnings + [text for flag, text in ((refinement_failed, WARNING), (has_fallback, FALLBACK_NOTICE),
+        notices = warnings + [text for flag, text in ((refinement_failed, WARNING), (refinement_skipped, SKIPPED),
+                                                      (has_fallback, FALLBACK_NOTICE),
                                                       (detail_incomplete, DETAIL_NOTICE)) if flag]
+        status = "discarded" if discarded else "unsaved" if kept else "done" if completed else "failed"
         try:
-            runs.update(identifier, status="unsaved" if kept else "done" if completed else "failed",
+            runs.update(identifier, status=status,
                         # An exception (including a failed save) leaves session() and main() returns 1.
-                        exit_code=rc if completed and not kept else 1, finished=runs.now(),
+                        exit_code=rc if (completed or discarded) and not kept else 1, finished=runs.now(),
                         stages=[{"name": name, "seconds": round(end - begin, 1)}
                                 for (name, begin), (_, end) in zip(marks, marks[1:])],
-                        flags={"refinement_failed": refinement_failed, "has_fallback": has_fallback,
-                               "detail_incomplete": detail_incomplete},
-                        warnings=notices, workspace_kept=kept)
+                        flags={"refinement_failed": refinement_failed, "refinement_skipped": refinement_skipped,
+                               "has_fallback": has_fallback, "detail_incomplete": detail_incomplete},
+                        audio_seconds=audio_seconds, warnings=notices, workspace_kept=kept)
         except OSError:  # Includes runs.Unavailable: a corrupt record must not change the exit code.
             console.print(REGISTRY_UNAVAILABLE, style="yellow", markup=False)
 
@@ -366,6 +433,8 @@ def session(args, config: dict, course: Path) -> int:
                       auto_refresh=False, transient=not console.is_terminal)) as live:
             # An outside process (the GUI) ends the lecture by creating the stop sentinel.
             while capture.poll() is None and not stop_requested and not (directory / "stop").exists():
+                if (directory / "discard").exists():  # This loop is the recording phase.
+                    raise Discarded
                 pressed = key()
                 if pressed == "q":
                     request_stop(None, None)
@@ -398,7 +467,7 @@ def session(args, config: dict, course: Path) -> int:
             # Keep the notes worker on live batches until offline source is
             # atomically ready. The capture child has exited and freed its GPU.
             if meta["refine"]:
-                from .refinement import timeout_seconds, WARNING
+                from .refinement import timeout_seconds, WARNING, SKIPPED
                 stages.append(("离线校正", time.monotonic()))
                 publish("refining")
                 if capture.returncode == 0:
@@ -416,6 +485,7 @@ def session(args, config: dict, course: Path) -> int:
                         publish()
                         show("课后离线校正中 · Q / Ctrl+C 跳过并保存实时记录")
                         time.sleep(0.2)
+                    refinement_skipped = cancelled
                     if refinement.poll() is None:
                         state = read_json(directory / "refinement-state.json")
                         state.update(complete=False, stage=state.get("status", "离线校正"),
@@ -431,7 +501,8 @@ def session(args, config: dict, course: Path) -> int:
                         state = read_json(directory / "refinement-state.json")
                         if not state.get("reason"):
                             state["reason"] = f"离线进程退出，退出码 {refinement.returncode}"
-                        state.update(status=WARNING, complete=False)
+                        # The notes worker reads "skipped" to word its notice as a skip, not a failure.
+                        state.update(status=SKIPPED if cancelled else WARNING, complete=False, skipped=cancelled)
                         write_json(directory / "refinement-state.json", state)
                 else:
                     write_json(directory / "refinement-state.json", {
@@ -450,6 +521,8 @@ def session(args, config: dict, course: Path) -> int:
                 time.sleep(0.2)
             stages.append(("", time.monotonic()))
         completed = True
+    except Discarded:
+        discarded = True
     finally:
         # Stop children before deleting their workspace. Also covers Ctrl+C/TERM/HUP and exceptions.
         for process in (capture, refinement, worker):
@@ -461,7 +534,7 @@ def session(args, config: dict, course: Path) -> int:
                     process.kill()
                     process.wait()
         try:
-            if (directory / "session.json").exists():
+            if (directory / "session.json").exists() and not discarded:
                 publish("saving")
                 preserve_tail(directory)
                 journal = Journal(directory)
@@ -469,15 +542,19 @@ def session(args, config: dict, course: Path) -> int:
                     state = read_json(directory / "asr-state.json")
                     if state.get("gain_notice"):
                         console.print("麦克风音量：" + state["gain_notice"], markup=False)
+                    audio = state.get("captured", state.get("seconds"))
+                    if isinstance(audio, (int, float)) and not isinstance(audio, bool):
+                        audio_seconds = round(audio, 1)
                     if state.get("error") or state.get("warning"):
                         warning = " ".join(filter(None, [state.get("error"), state.get("warning")]))
                         journal.add_warning(warning)
                         warnings.append(warning)
                         console.print(warning, style="yellow", markup=False)
                     if meta["refine"] and refined_events(directory) is None:
-                        from .refinement import WARNING
-                        journal.add_warning(WARNING)
-                        refinement_failed = True
+                        from .refinement import WARNING, SKIPPED
+                        # A user skip is not a failure; the notes say which one happened.
+                        journal.add_warning(SKIPPED if refinement_skipped else WARNING)
+                        refinement_failed = not refinement_skipped
                     journal.fallback()
                     journal.preserve_detail_tail()
                     journal.render(finished=True)
@@ -491,7 +568,17 @@ def session(args, config: dict, course: Path) -> int:
                 log.close()
             kept = None
             try:
-                if persisted or not (directory / "session.json").exists():
+                if discarded:
+                    failed = discard_outputs(output)
+                    for folder in created_dirs:
+                        with contextlib.suppress(OSError):
+                            folder.rmdir()  # Only when empty: other notes may have arrived meanwhile.
+                    if failed:
+                        rc = 1
+                        warnings.append("以下文件未能删除：" + "、".join(failed))
+                        console.print(warnings[-1], style="yellow", markup=False)
+                    shutil.rmtree(directory)
+                elif persisted or not (directory / "session.json").exists():
                     shutil.rmtree(directory)
                 else:
                     kept = str(directory)
@@ -503,6 +590,10 @@ def session(args, config: dict, course: Path) -> int:
                 owner_lock.close()
                 for sig, handler in handlers.items():
                     signal.signal(sig, handler)
+    if discarded:
+        if not rc:
+            console.print(DISCARDED, markup=False)
+        return rc
     console.print(f"已保存：{output}\n本次 /tmp 中间文件已清理。", markup=False)
     if not stages[-1][0]:
         console.print("耗时：" + " · ".join(
@@ -511,6 +602,9 @@ def session(args, config: dict, course: Path) -> int:
     if refinement_failed:
         from .refinement import WARNING
         console.print(WARNING, style="yellow", markup=False)
+    if refinement_skipped:
+        from .refinement import SKIPPED
+        console.print(SKIPPED, markup=False)
     if has_fallback:
         console.print(FALLBACK_NOTICE, style="yellow")
     if detail_incomplete:
@@ -742,7 +836,8 @@ def main(argv=None):
 
     try:
         # The courses folder is checked by the commands that need it, so setup can still fix it.
-        problems = [p for p in settings.validate(config) if p.field != "courses_dir"]
+        # Opener choices and remembered course settings only concern the GUI; they never block a lecture.
+        problems = [p for p in settings.validate(config) if p.field not in settings.GUI_ONLY]
         if problems:
             raise ValueError(problems[0].message)
         if args.command == "prepare" or (args.command in ("start", "doctor", "demo")
@@ -814,11 +909,16 @@ def main(argv=None):
                 capture_python(config["asr_model"], config.get("qwen_python"))
                 if config.get("refine"):
                     capture_python(config["refine_model"], config.get("qwen_python"))
-                if config["asr_model"] in QWEN_MODELS and config["language"] == "auto":
-                    raise ValueError("Qwen 流式识别需要 --language en 或 zh")
             if not os.environ.get("LECTURE_NOTES_API_KEY"):
                 raise ValueError("缺少笔记服务 key，请先运行 lecture setup 或设置 LECTURE_NOTES_API_KEY")
-            return session(args, config, select_course(root, args.course))
+            course = select_course(root, args.course)
+            # --language wins, then the language remembered for this course, then the global default.
+            if args.command == "start" and args.language is None:
+                config["language"] = settings.course_language(config, course.name) or config["language"]
+            if args.command == "start" and config["asr_backend"] == "local" and \
+                    config["asr_model"] in QWEN_MODELS and config["language"] == "auto":
+                raise ValueError("Qwen 流式识别需要 --language en 或 zh")
+            return session(args, config, course)
         return 0
     except (ValueError, OSError) as exc:
         console.print(f"错误：{exc}", style="red", markup=False)
