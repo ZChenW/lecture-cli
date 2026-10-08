@@ -86,7 +86,7 @@
     padding: 0 8px;
     border: 0;
     background: transparent;
-    color: #8E9096;
+    color: #A9ABB0; /* --muted, the secondary text colour of the dark screens */
     font-size: 14px;
     white-space: nowrap;
     cursor: pointer;
