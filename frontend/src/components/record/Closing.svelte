@@ -66,6 +66,7 @@
   .meta span { font-size: 13px; color: #8E9096; }
   .center { flex: 2 1 420px; display: flex; flex-direction: column; justify-content: center; gap: 22px; min-width: 0; }
   .spacer { flex: 1 1 320px; max-width: 420px; }
+  /* Section heading: 0.24em by the user-confirmed rule (form field labels use 0.08em, see base.css). */
   .label { font-size: 12px; letter-spacing: 0.24em; color: #8E9096; }
   .stages { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; }
   li {

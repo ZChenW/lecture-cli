@@ -144,7 +144,10 @@ a { color: inherit; }
 
 .field { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
 /* Field labels: 13px as in both references; Chinese labels track 0.08em (standing preference),
-   the English-only "API key" keeps the reference's normal spacing. */
+   the English-only "API key" keeps the reference's normal spacing.
+   Letter-spacing rule (user-confirmed): form field labels 0.08em; section headings such as
+   "实时转录" "随堂笔记" "正在整理笔记" "课堂结束" "录制中" (StateLabel) 0.24em. The recording
+   screens' existing 0.24em values stay as they are. */
 .field > span:not(.field-note), .field > label, .label {
   font-size: 13px;
   letter-spacing: 0.08em;

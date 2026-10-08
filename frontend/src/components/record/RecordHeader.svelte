@@ -118,23 +118,26 @@
   }
   .round:hover, .round[aria-expanded="true"] { color: #ECEAE4; border-color: #34363B; }
   .more { position: relative; }
-  /* The dark dropdown surface of plan N2.1: #15171A, 1px line, no radius. */
+  /* HANDOFF 3.2: the warning banner's surface and 10px radius, with room around the item. The banner
+     is rgba(255,255,255,0.04) over #0B0C0E; a menu covers text, so it uses that colour opaque. */
   .menu {
     position: absolute;
     right: 0;
     top: calc(100% + 6px);
-    min-width: 260px;
-    padding: 6px 0;
-    background: #15171A;
-    border: 1px solid #34363B;
+    min-width: 280px;
+    padding: 8px;
+    border-radius: 10px;
+    background: #151618;
+    border: 1px solid #26282C;
     box-shadow: 0 12px 32px rgba(0, 0, 0, 0.45);
     outline: none;
   }
   .item {
     width: 100%;
     min-height: 44px;
-    padding: 0 14px;
+    padding: 0 16px;
     border: 0;
+    border-radius: 6px;
     background: transparent;
     color: #ECEAE4;
     font-size: 15px;

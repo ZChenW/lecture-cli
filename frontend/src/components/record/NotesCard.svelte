@@ -41,6 +41,7 @@
     max-height: calc(100vh - 260px);
   }
   .head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+  /* Section heading: 0.24em by the user-confirmed rule (form field labels use 0.08em, see base.css). */
   .label { font-size: 12px; letter-spacing: 0.24em; color: #8E9096; }
   .ago { font-family: 'Geist Mono', monospace; font-size: 12px; color: #8E9096; }
   .dead { margin: 0; font-size: 13px; line-height: 1.6; color: #FFB454; }

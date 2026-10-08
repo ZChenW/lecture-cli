@@ -34,27 +34,20 @@
 </section>
 
 <style>
-  .live { flex: 2 1 420px; display: flex; flex-direction: column; justify-content: center; gap: 22px; min-width: 0; }
+  .live { flex: 2 1 420px; display: flex; flex-direction: column; justify-content: center; gap: 22px; min-width: 0; min-height: 0; }
+  /* Section heading: 0.24em by the user-confirmed rule (form field labels use 0.08em, see base.css). */
   .label { font-size: 12px; letter-spacing: 0.24em; color: #8E9096; }
   /* The reference's lines sit directly in the column; this wrapper keeps the same 22px rhythm. */
-  .lines { display: flex; flex-direction: column; gap: 22px; }
+  /* HANDOFF 3.3: confirmed lines show in full. When they outgrow the column, the newest stay in view
+     and the oldest leave at the top (justify-content: flex-end overflows upward). */
+  .lines { display: flex; flex-direction: column; justify-content: flex-end; gap: 22px; min-height: 0; overflow: hidden; }
   p { margin: 0; }
-  .older {
-    font-size: 22px;
-    line-height: 1.4;
-    font-weight: 300;
-    /* Long segments stop at two lines so the column never outgrows the window. */
-    display: -webkit-box;
-    -webkit-box-orient: vertical;
-    -webkit-line-clamp: 2;
-    line-clamp: 2;
-    overflow: hidden;
-  }
+  .older { flex: none; font-size: 22px; line-height: 1.4; font-weight: 300; overflow-wrap: anywhere; }
   .size0 { color: #4A4C52; }
   .size1 { color: #5E6067; }
   .size2 { font-size: 24px; color: #7E8087; }
   .size3 { font-size: 26px; color: #A9ABB0; }
-  .current { font-size: 38px; line-height: 1.25; font-weight: 400; letter-spacing: -0.01em; color: #FFFFFF; text-wrap: pretty; }
+  .current { flex: none; font-size: 38px; line-height: 1.25; font-weight: 400; letter-spacing: -0.01em; color: #FFFFFF; text-wrap: pretty; }
   .waiting { color: #8E9096; }
   .cursor {
     display: inline-block;
