@@ -32,7 +32,7 @@ export interface Config {
   auto_gain: boolean;
   qwen_python: string | null;
   onboarded?: boolean;
-  course_settings?: Record<string, { language?: string; asr_model?: string }>;
+  course_settings?: Record<string, { language?: string; asr_model?: string; refine?: string }>;
   [key: string]: unknown;
 }
 
