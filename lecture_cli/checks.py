@@ -169,7 +169,7 @@ def run_checks(config, *, environ=None, runner=None, which=None, cached=None, tr
             results.append(refine_ready(config, cached))
     results += [
         microphone(config),
-        check("wpctl", "wpctl", bool(which("wpctl")), hint="安装 WirePlumber 以启用自动降低削波音量", bad="warn"),
+        check("wpctl", "wpctl", bool(which("wpctl")), hint="安装 WirePlumber 以启用自动调节麦克风音量", bad="warn"),
         cjk_font(runner),
         service("notes_service", f"笔记服务（{notes_label(config)}）", test_notes(config, notes_key, transport)),
     ]

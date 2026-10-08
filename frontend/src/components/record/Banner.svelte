@@ -9,15 +9,19 @@
   // The weak-input text that was closed: the start-of-recording notice (plan GUI-3 item 5) and the
   // weak-input one share the field, so a different text shows again.
   let weakClosed = $state<string | null>(null);
+  // Plan GUI-4 Q2.3: the volume change that was closed, by its id: a later change shows again.
+  let gainClosed = $state<number | null>(null);
   let items = $derived(bannerItems(asr).filter((item) => item.kind === "error" ||
-    (item.kind === "weak" ? item.text !== weakClosed : !dismissed.includes(item.text))));
+    (item.kind === "weak" ? item.text !== weakClosed
+      : item.kind === "gain_change" ? item.id !== gainClosed : !dismissed.includes(item.text))));
   // Plan N3.4: a closed weak-input banner comes back if the input recovers and later turns weak again.
   $effect(() => {
     if (!asr.weak_input) weakClosed = null;
   });
 
-  function close(item: { kind: string; text: string }) {
+  function close(item: { kind: string; text: string; id?: number }) {
     if (item.kind === "weak") weakClosed = item.text;
+    else if (item.kind === "gain_change") gainClosed = item.id ?? null;
     else dismissed = [...dismissed, item.text];
   }
 </script>

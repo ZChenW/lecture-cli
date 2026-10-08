@@ -15,9 +15,9 @@ from lecture_cli.storage import read_json, write_json
 
 def test_clipping_step_uses_cubic_volume_scale():
     decision = mic_gain.decide_gain(0.85, 32, 32000)
-    assert decision.volume == pytest.approx(0.85 * 10 ** (-12 / 60))
-    assert 20 * np.log10((decision.volume / 0.85) ** 3) == pytest.approx(-12)
-    assert decision.notice == "检测到削波，麦克风音量 85% → 54%"
+    assert decision.volume == pytest.approx(0.85 * 10 ** (-6 / 60))  # Plan GUI-4 Q2.1: 6 dB, was 12 dB.
+    assert 20 * np.log10((decision.volume / 0.85) ** 3) == pytest.approx(-6)
+    assert decision.notice == "检测到削波，麦克风音量 85% → 68%"
     assert decision.skip_next
 
 
@@ -28,7 +28,8 @@ def test_repeated_steps_stop_at_floor_and_warn_about_hardware():
         decision = mic_gain.decide_gain(volume, 32000, 32000)
         adjusted.append(decision.volume)
         volume = decision.volume
-    assert adjusted == pytest.approx([0.536313, 0.338391, 0.21351, 0.134716, 0.1], abs=1e-6)
+    assert adjusted == pytest.approx([0.675179, 0.536314, 0.426009, 0.338391, 0.268794, 0.21351, 0.169597,
+                                      0.134716, 0.107009, 0.1], abs=1e-6)
     decision = mic_gain.decide_gain(volume, 32, 32000)
     assert decision.volume is None and "Mic Boost" in decision.notice
 
@@ -119,13 +120,18 @@ def test_callback_counts_raw_samples_and_waits_for_complete_window(fake_wpctl):
     assert len(fake_wpctl.calls) == 1, "observe must not spawn wpctl"
     block[:32] = 1
     gain.observe(block)
+    assert not gain.poll(), "one clipping window only counts"
+    assert len(fake_wpctl.calls) == 1
+    for _ in range(4):
+        gain.observe(block)
     assert gain.poll()
-    assert fake_wpctl.calls[-1] == ["wpctl", "set-volume", mic_gain.SOURCE, "0.536314"]
+    assert fake_wpctl.calls[-1] == ["wpctl", "set-volume", mic_gain.SOURCE, "0.675179"]
 
 
 def test_poll_skips_one_window_then_can_adjust_again(fake_wpctl):
     gain = mic_gain.mic_gain({})
-    for expected_sets in (1, 1, 2):
+    # Clip run, lower, settling window, a new clip run, lower again.
+    for expected_sets in (0, 1, 1, 1, 2):
         gain.observe(np.ones(32000))
         gain.poll()
         assert len([c for c in fake_wpctl.calls if c[1] == "set-volume"]) == expected_sets
@@ -141,6 +147,8 @@ def test_pause_discards_partial_window_and_excludes_paused_audio(fake_wpctl):
     gain.observe(np.ones(16000))
     assert not gain.poll()
     gain.observe(np.ones(16000))
+    assert not gain.poll() and gain.total == 0 and gain.pending_clip  # a complete clipping window
+    gain.observe(np.ones(32000))
     assert gain.poll()
     assert len(fake_wpctl.calls) == 3
 
@@ -149,14 +157,18 @@ def test_poll_reads_current_volume_before_lowering(fake_wpctl):
     gain = mic_gain.mic_gain({})
     fake_wpctl.volume = 0.35  # A user changed the volume during recording.
     gain.observe(np.ones(32000))
+    assert not gain.poll()
+    gain.observe(np.ones(32000))
     assert gain.poll()
     assert fake_wpctl.volume == pytest.approx(0.35 * mic_gain.GAIN_STEP, abs=1e-6)
-    assert "35% → 22%" in gain.notice
+    assert "35% → 28%" in gain.notice
 
 
 def test_source_muted_during_recording_is_never_unmuted(fake_wpctl):
     gain = mic_gain.mic_gain({})
     fake_wpctl.muted = True
+    gain.observe(np.ones(32000))
+    assert not gain.poll()
     gain.observe(np.ones(32000))
     assert gain.poll() and "已静音" in gain.notice and not gain.active
     assert [c[1] for c in fake_wpctl.calls] == ["get-volume", "get-volume"]
@@ -168,6 +180,8 @@ def test_write_failure_disables_gain_without_aborting_recording():
             raise subprocess.CalledProcessError(1, command)
         return SimpleNamespace(stdout="Volume: 0.85")
     gain = mic_gain.mic_gain({}, runner)
+    gain.observe(np.ones(32000))
+    assert not gain.poll()
     gain.observe(np.ones(32000))
     assert gain.poll() and not gain.active and "录制照常" in gain.notice
 
@@ -216,9 +230,10 @@ def test_backends_adjust_outside_callback_and_persist_notice(tmp_path, monkeypat
                     if missing:
                         assert "未找到 wpctl" in state["gain_notice"]
                     else:
-                        expected = 1 if window < 2 else 2
+                        # Plan GUI-4 Q2.1: a clip run of two windows, then the settling window.
+                        expected = (0, 1, 1)[window]
                         assert len([c for c in fake_wpctl.calls if c[1] == "set-volume"]) == expected
-                        assert "检测到削波" in state["gain_notice"]
+                        assert ("检测到削波" in state["gain_notice"]) == (window > 0)
             finally:
                 (tmp_path / "stop").touch()
         def stop(self): pass
@@ -239,8 +254,9 @@ def test_backends_adjust_outside_callback_and_persist_notice(tmp_path, monkeypat
     state = read_json(tmp_path / "asr-state.json")
     assert state["status"] == "转录完成" and state["captured"] == 6
     if not missing:
-        assert fake_wpctl.volume == pytest.approx(0.85 * mic_gain.GAIN_STEP ** 2, abs=1e-6)
-        assert "54% → 34%" in state["gain_notice"]
+        assert fake_wpctl.volume == pytest.approx(0.85 * mic_gain.GAIN_STEP, abs=1e-6)
+        assert "85% → 68%" in state["gain_notice"]
+        assert state["gain_change"] == {"id": 1, "text": "刚才声音过大，麦克风音量已从 85% 调到 68%"}
 
 
 def test_display_shows_microphone_notice(tmp_path):

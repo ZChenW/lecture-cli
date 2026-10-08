@@ -201,6 +201,12 @@ def join_live(pending, buffer) -> str:
     return pending + ("" if CJK.match(pending[-1]) or CJK.match(buffer[0]) else " ") + buffer
 
 
+def gain_change(value):
+    if isinstance(value, dict) and isinstance(value.get("text"), str) and value["text"] and isinstance(value.get("id"), int):
+        return {"id": value["id"], "text": value["text"]}
+    return None
+
+
 def snapshot(directory: Path, cache: SnapshotCache | None = None) -> dict:
     """The only session shape the frontend depends on; field meanings follow cli.display()."""
     cache = cache or SnapshotCache()
@@ -251,6 +257,9 @@ def snapshot(directory: Path, cache: SnapshotCache | None = None) -> dict:
             # Plan N3.4: long weak input while someone talks. The mic cell and a dismissible banner show it;
             # it is not one of the notices, which are not dismissible.
             "weak_input": asr.get("weak_input") or None,
+            # Plan GUI-4 Q2.3: the latest automatic volume change, a dismissible banner; id tells a
+            # repeated text apart, so the same change happening again shows again.
+            "gain_change": gain_change(asr.get("gain_change")),
         },
         "transcript": {
             "count": cache.transcript.count,

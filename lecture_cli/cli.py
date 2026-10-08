@@ -855,7 +855,7 @@ def main(argv=None):
             sub.add_argument("--refine", action=argparse.BooleanOptionalAction, default=None,
                              help="下课后重新转录（配置 refine_backend：local 本机 Qwen，api 云端）；临时保存音频，完成后删除")
             sub.add_argument("--auto-gain", action=argparse.BooleanOptionalAction, default=None,
-                             help="自动降低 PipeWire 默认麦克风的削波音量，默认启用")
+                             help="自动调节 PipeWire 默认麦克风音量（削波时调低、偏弱时调回），默认启用")
             sub.add_argument("--device", help="麦克风编号或名称")
             sub.add_argument("--language", help="课堂语言，默认 en")
             sub.add_argument("--audio-file", help="使用已有音频代替麦克风")

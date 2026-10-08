@@ -166,7 +166,7 @@ describe("N2.5 recording texts", () => {
   it("puts the mic volume notice in the mic cell", () => {
     const asr = (text: string) => snap({}).asr && { ...snap({}).asr, notices: text ? [{ kind: "gain", text }] : [] };
     expect(gainState(asr(""))).toBeNull();
-    expect(gainState(asr("80% · 自动降低削波音量已启用"))).toEqual({ cell: "自动调节开", detail: "80% · 自动降低削波音量已启用", warn: false });
+    expect(gainState(asr("80% · 自动调节麦克风音量已启用"))).toEqual({ cell: "自动调节开", detail: "80% · 自动调节麦克风音量已启用", warn: false });
     expect(gainState(asr("所选麦克风不是 PipeWire 默认源，未启用自动音量调节。"))?.cell).toBe("自动调节关");
     expect(gainState(asr("默认麦克风已静音；请手动取消静音，自动调节不会取消静音。"))?.warn).toBe(true);
   });

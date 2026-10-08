@@ -13,7 +13,7 @@ from .storage import has_content, read_json, write_json
 from .audio_buffer import AudioBuffer, drain_timeout
 from .asr import build_engine, session_context
 from .mic_gain import mic_gain
-from .input_level import WeakInput
+from .input_level import NOTICE as WEAK_NOTICE, WeakInput
 
 
 def timestamp(seconds: float) -> str:
@@ -135,6 +135,8 @@ async def record(directory: Path) -> None:
                 state["gain_notice"] = gain.notice
                 if gain.adjusted is not None:
                     state["gain_volume"] = gain.adjusted  # Plan N3.5: restored after the run when unchanged.
+                if gain.change:
+                    state["gain_change"] = gain.change  # Plan GUI-4 Q2.3: GUI banner only, never the note.
             if not meta.get("audio_file"):
                 state.update(audio.snapshot())
             if state.get("input_overflows"):
@@ -198,6 +200,8 @@ async def record(directory: Path) -> None:
                 state["status"] = "已暂停" if paused else "录制中"
                 state["level"] = 0
                 publish(True)
+            if gain:
+                gain.weak = weak.notice == WEAK_NOTICE  # Plan GUI-4 Q2.2: raises only while it shows.
             if gain and gain.poll():
                 publish(True)
             if paused and not audio.snapshot()["queued"]:

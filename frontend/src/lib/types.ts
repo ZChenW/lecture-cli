@@ -80,7 +80,7 @@ export interface Device { index: number; name: string; channels: number; default
 export interface Devices { devices: Device[]; selected: string | number | null; notes: Record<string, string> }
 export interface Task { id: string; status: "running" | "done" | "failed"; exit_code: number | null; output: string[] }
 
-export interface Notice { kind: string; text: string }
+export interface Notice { kind: string; text: string; id?: number }
 export interface Stage { name: string; start: number; end: number | null }
 export interface Snapshot {
   run_id: string | null;
@@ -98,6 +98,8 @@ export interface Snapshot {
     backlog_seconds: number; queued_seconds: number; notices: Notice[]; error: string | null;
     /** Plan N3.4: 30 s of weak input while someone talks; GUI only, never in the note. */
     weak_input?: string | null;
+    /** Plan GUI-4 Q2.3: the latest automatic mic volume change; GUI only, never in the note. */
+    gain_change?: { id: number; text: string } | null;
   };
   transcript: { count: number; tail: { id: number; start: string; end: string; text: string }[]; pending: string };
   notes: { status: string; worker_alive: boolean | null; unprocessed_segments: number; updated: number | null; latest: string | null };

@@ -66,7 +66,7 @@
   <div class="field">
     <span class="label">自动调节音量</span>
     <Choices label="自动调节音量" bind:value={autoGain} options={[
-      { value: "on", title: "开", text: "声音过大会削波时自动调低系统默认麦克风的音量，避免爆音。只对系统默认输入生效。" },
+      { value: "on", title: "开", text: "连续削波时自动调低系统默认麦克风的音量，之后声音偏弱时再调回，最多回到开始时的音量。只对系统默认输入生效。" },
       { value: "off", title: "关", text: "不改动系统音量。" },
     ]} />
   </div>

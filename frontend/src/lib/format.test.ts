@@ -23,10 +23,20 @@ describe("snapshot view mapping", () => {
 
   it("keeps the mic volume notice out of the banners unless the microphone needs a hand", () => {
     const asr = { status: "", device_label: null, model: null, level: 0, backlog_seconds: 0, queued_seconds: 0, error: null };
-    expect(bannerItems({ ...asr, notices: [{ kind: "gain", text: "80% · 自动降低削波音量已启用" }] })).toEqual([]);
+    expect(bannerItems({ ...asr, notices: [{ kind: "gain", text: "80% · 自动调节麦克风音量已启用" }] })).toEqual([]);
     expect(bannerItems({ ...asr, notices: [{ kind: "gain", text: "检测到削波，麦克风音量 80% → 63%" }] })).toEqual([]);
     const muted = { kind: "gain", text: "默认麦克风已静音；请手动取消静音，自动调节不会取消静音。" };
     expect(bannerItems({ ...asr, notices: [muted] })).toEqual([muted]);
+  });
+
+  it("gives each automatic volume change a banner of its own (plan GUI-4 Q2.3)", () => {
+    const asr = { status: "", device_label: null, model: null, level: 0, backlog_seconds: 0, queued_seconds: 0, error: null,
+      notices: [{ kind: "gain", text: "检测到削波，麦克风音量 100% → 79%" }] };
+    expect(bannerItems({ ...asr, gain_change: { id: 1, text: "刚才声音过大，麦克风音量已从 100% 调到 79%" } }))
+      .toEqual([{ kind: "gain_change", text: "刚才声音过大，麦克风音量已从 100% 调到 79%", id: 1 }]);
+    expect(bannerItems({ ...asr, gain_change: { id: 2, text: "声音偏弱，麦克风音量已调回 100%" } }))
+      .toEqual([{ kind: "gain_change", text: "声音偏弱，麦克风音量已调回 100%", id: 2 }]);
+    expect(bannerItems({ ...asr, gain_change: null })).toEqual([]);
   });
 
   it("adds the weak-input notice as its own closable banner (plan N3.4)", () => {

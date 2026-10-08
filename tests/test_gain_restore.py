@@ -44,6 +44,8 @@ def test_gain_records_the_last_volume_it_set(fake_wpctl):
     gain = mic_gain.mic_gain({})
     assert gain.adjusted is None
     gain.observe(np.ones(32000))
+    assert not gain.poll() and gain.adjusted is None  # Plan GUI-4 Q2.1: one clipping window only counts.
+    gain.observe(np.ones(32000))
     assert gain.poll()
     assert gain.adjusted == pytest.approx(0.85 * mic_gain.GAIN_STEP)
 
@@ -80,6 +82,26 @@ else:
 '''
 
 SHIM = '''
+if os.environ.get("LECTURE_TEST_PRIVATE_APP"):
+    # Plan GUI-4 Q2: any other lecture process of this user (a GUI server starting or finding a
+    # stale record, any lecture command) runs cli.reap_stale_sessions(), which scans every
+    # /tmp/lecture-<uid>-* workspace. Between the crash test killing its controller and running its
+    # own recovery, such a foreign reaper could recover this workspace first, without the fake
+    # wpctl on its PATH, and the test then found nothing to restore. The test's controller tags its
+    # session.json with a private app name that foreign reapers skip; only processes running this
+    # shim read the tag back as lecture-cli-v1.
+    from lecture_cli import cli as _cli
+    _write_json, _read_json = _cli.write_json, _cli.read_json
+    def _private_write(path, value):
+        if path.name == "session.json" and value.get("app") == "lecture-cli-v1":
+            value = {**value, "app": "lecture-cli-v1+test-private"}
+        _write_json(path, value)
+    def _private_read(path):
+        value = _read_json(path)
+        if path.name == "session.json" and value.get("app") == "lecture-cli-v1+test-private":
+            value = {**value, "app": "lecture-cli-v1"}
+        return value
+    _cli.write_json, _cli.read_json = _private_write, _private_read
 if "_capture" in sys.argv and os.environ.get("LECTURE_TEST_GAIN"):
     from lecture_cli import capture, mic_gain
     from lecture_cli.storage import write_json
@@ -112,7 +134,8 @@ def wpctl_runtime(stub_runtime, tmp_path):
     (bin_dir / "wpctl").chmod(0o755)
     state = tmp_path / "wpctl.json"
     state.write_text(json.dumps({"volume": 0.85}))
-    env.update(PATH=f"{bin_dir}:{env['PATH']}", FAKE_WPCTL_STATE=str(state), LECTURE_TEST_GAIN="1")
+    env.update(PATH=f"{bin_dir}:{env['PATH']}", FAKE_WPCTL_STATE=str(state), LECTURE_TEST_GAIN="1",
+               LECTURE_TEST_PRIVATE_APP="1")
     return root, env, state
 
 
@@ -228,7 +251,9 @@ def test_crashed_run_is_restored_on_the_next_launch(wpctl_runtime):
         result = subprocess.run([sys.executable, "-m", "lecture_cli", "--courses-dir", str(root), "courses"],
                                 env=env, capture_output=True, text=True, timeout=10)
         assert result.returncode == 0, result.stdout + result.stderr
-        assert volume(state) == 0.85
+        # The workspace was invisible to any other lecture process (see LECTURE_TEST_PRIVATE_APP).
+        assert meta["app"] == "lecture-cli-v1+test-private"
+        assert volume(state) == 0.85, result.stdout + result.stderr
         assert "上次录制的麦克风音量：已恢复为开始时的 85%。" in result.stdout
         assert not directory.exists()
     finally:

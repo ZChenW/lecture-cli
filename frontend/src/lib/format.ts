@@ -32,6 +32,8 @@ export function bannerItems(asr: Snapshot["asr"]): Notice[] {
   }
   // Plan N3.4: weak input gets a banner that can be closed, besides the mic cell's warning colour.
   if (asr.weak_input) items.push({ kind: "weak", text: asr.weak_input });
+  // Plan GUI-4 Q2.3: each automatic volume change, lowered or raised, gets a banner that can be closed.
+  if (asr.gain_change?.text) items.push({ kind: "gain_change", text: asr.gain_change.text, id: asr.gain_change.id });
   return items;
 }
 

@@ -18,7 +18,7 @@ from .capture import Transcript
 from .refinement import BYTES_PER_SECOND, segment_cut
 from .storage import has_content, read_json, write_json
 from .mic_gain import mic_gain
-from .input_level import WeakInput
+from .input_level import NOTICE as WEAK_NOTICE, WeakInput
 
 API_TIMEOUT = httpx.Timeout(60, connect=10)
 RETRY_WARNING = "转录服务暂不可用，正在重试；音频已暂存"
@@ -155,6 +155,8 @@ async def record(directory: Path, transport=None):
                 state["gain_notice"] = gain.notice
                 if gain.adjusted is not None:
                     state["gain_volume"] = gain.adjusted  # Plan N3.5: restored after the run when unchanged.
+                if gain.change:
+                    state["gain_change"] = gain.change  # Plan GUI-4 Q2.3: GUI banner only, never the note.
             state.update(audio.snapshot(), lag=max(0, extracted - state["seconds"]),
                          last=transcript.last, count=transcript.count)
             write_json(state_path, state)
@@ -181,6 +183,8 @@ async def record(directory: Path, transport=None):
                         stream.stop() if paused else stream.start()
                     state["status"] = "已暂停" if paused else "录制中"
                     publish(True)
+                if gain:
+                    gain.weak = weak.notice == WEAK_NOTICE  # Plan GUI-4 Q2.2: raises only while it shows.
                 if gain and gain.poll():
                     publish(True)
                 publish()
