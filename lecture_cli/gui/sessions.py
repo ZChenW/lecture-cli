@@ -17,6 +17,7 @@ from urllib.parse import quote
 from .. import runs
 from ..asr import QWEN_MODELS
 from ..refinement import label as refine_label
+from ..storage import TEXT_MARKER, has_content
 
 START_TIMEOUT = 15
 # Closing estimate (seconds of closing work per recorded second), used until the registry has history.
@@ -62,6 +63,15 @@ def number(value, default=0.0) -> float:
     return value if isinstance(value, (int, float)) and not isinstance(value, bool) else default
 
 
+def clock_seconds(value, default=None):
+    """"00:46:58.20" (the transcript's audio clock) → seconds; default when it is not one."""
+    try:
+        hours, minutes, seconds = value.split(":")
+        return int(hours) * 3600 + int(minutes) * 60 + float(seconds)
+    except (AttributeError, ValueError):
+        return default
+
+
 class TranscriptTail:
     """Reads transcript.jsonl incrementally; the file grows for the whole lecture."""
 
@@ -70,6 +80,7 @@ class TranscriptTail:
         self.offset = 0
         self.count = 0
         self.tail = deque(maxlen=TAIL_SEGMENTS)
+        self.last_text = None  # plan GUI-4 Q3.1: end (audio seconds) of the latest segment with content
 
     def read(self, path: Path) -> None:
         try:
@@ -94,6 +105,8 @@ class TranscriptTail:
             if isinstance(record, dict):
                 self.count += 1
                 self.tail.append({key: record.get(key) for key in ("id", "start", "end", "text")})
+                if isinstance(record.get("text"), str) and has_content(TEXT_MARKER.sub("", record["text"])):
+                    self.last_text = clock_seconds(record.get("end"), self.last_text)
         self.offset += end
 
 
@@ -265,6 +278,8 @@ def snapshot(directory: Path, cache: SnapshotCache | None = None) -> dict:
             "count": cache.transcript.count,
             "tail": list(cache.transcript.tail),
             "pending": join_live(asr.get("pending"), asr.get("buffer")),
+            # Plan GUI-4 Q3.1: the recording screen shows "上次出字 … 前" from elapsed_seconds minus this.
+            "last_text_seconds": cache.transcript.last_text,
         },
         "notes": {
             "status": notes.get("status") or "等待新增转录",

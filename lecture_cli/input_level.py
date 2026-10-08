@@ -1,6 +1,7 @@
 """Tell the user, while recording, when the voice reaching the recogniser is too weak."""
 from __future__ import annotations
 
+import json
 import math
 
 SAMPLE_RATE = 16000
@@ -65,6 +66,11 @@ class WeakInput:
         self.second_samples = 0
         self.second_count = 0     # confirmed segments when the current second began
         self.levels = []          # (dBFS, confirmed segments when that second began), the last 30 s
+        # Plan GUI-4 Q3.2: each 10 s window's RMS is appended to this file (levels.jsonl) when set, on
+        # the transcript's clock: every sample fed here, a partial window dropped at a pause included.
+        self.levels_path = None
+        self.clock = 0            # samples fed so far
+        self.window_start = 0     # clock when the current window began
 
     def add(self, pcm: bytes, confirmed: int) -> bool:
         """Account s16le mono audio; confirmed is the transcript's segment count. True if notice or seconds changed."""
@@ -75,9 +81,11 @@ class WeakInput:
         while data.size:
             if self.samples == 0:
                 self.window_count = confirmed
+                self.window_start = self.clock
             part, data = data[:WINDOW_SECONDS * SAMPLE_RATE - self.samples], data[WINDOW_SECONDS * SAMPLE_RATE - self.samples:]
             self.squares += float(np.dot(part, part))
             self.samples += part.size
+            self.clock += part.size
             if self.samples >= WINDOW_SECONDS * SAMPLE_RATE:
                 changed |= self.close_window(confirmed)
         return changed
@@ -85,6 +93,7 @@ class WeakInput:
     def close_window(self, confirmed: int) -> bool:
         rms = (self.squares / self.samples) ** 0.5
         self.squares, self.samples = 0.0, 0
+        self.record_level(rms)
         if rms > 0 and 20 * math.log10(rms) >= WEAK_DBFS:
             self.streak = self.uncounted = self.streak_seconds = 0
             return self.set("")
@@ -104,6 +113,18 @@ class WeakInput:
             self.seconds += self.streak_seconds
             return self.set(NOTICE)
         return False
+
+    def record_level(self, rms: float) -> None:
+        """Plan GUI-4 Q3.2: one line per 10 s window; a failed write never affects the recording."""
+        if self.levels_path is None:
+            return
+        line = json.dumps({"start": round(self.window_start / SAMPLE_RATE, 2), "end": round(self.clock / SAMPLE_RATE, 2),
+                           "rms_dbfs": round(20 * math.log10(rms), 1) if rms > 0 else FLOOR_DBFS})
+        try:
+            with open(self.levels_path, "a", encoding="utf-8") as f:
+                f.write(line + "\n")
+        except OSError:
+            pass
 
     def pause(self) -> None:
         # Audio before and after a break is not one continuous stretch: drop the partial window.

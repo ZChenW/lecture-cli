@@ -28,7 +28,7 @@
       <span>{destinationLine(snapshot.course, false)}</span>
     </div>
   </section>
-  <Transcript transcript={snapshot.transcript} />
+  <Transcript transcript={snapshot.transcript} elapsed={snapshot.elapsed_seconds} paused={snapshot.paused} />
   <NotesCard notes={snapshot.notes} {now} />
 </main>
 

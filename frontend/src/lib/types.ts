@@ -101,7 +101,11 @@ export interface Snapshot {
     /** Plan GUI-4 Q2.3: the latest automatic mic volume change; GUI only, never in the note. */
     gain_change?: { id: number; text: string } | null;
   };
-  transcript: { count: number; tail: { id: number; start: string; end: string; text: string }[]; pending: string };
+  transcript: {
+    count: number; tail: { id: number; start: string; end: string; text: string }[]; pending: string;
+    /** Plan GUI-4 Q3.1: end of the latest segment with text, in recorded seconds; null before any. */
+    last_text_seconds?: number | null;
+  };
   notes: { status: string; worker_alive: boolean | null; unprocessed_segments: number; updated: number | null; latest: string | null };
   refine: { enabled: boolean; status: string | null; reason: string | null; progress?: number | null; eta_seconds?: number | null };
   closing_estimate_seconds?: number | null;

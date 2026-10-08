@@ -212,3 +212,23 @@ export function isTyping(target: EventTarget | null): boolean {
   const element = target as HTMLElement | null;
   return !!element && (element.isContentEditable || ["INPUT", "TEXTAREA", "SELECT"].includes(element.tagName));
 }
+
+/** Plan GUI-4 Q3.1: shown from 20 s since the last segment with text, in the warning colour past 2 minutes. */
+export const SINCE_TEXT_SHOW = 20;
+export const SINCE_TEXT_WARN = 120;
+
+/**
+ * "上次出字 0:42 前" beside the 实时转录 heading: recorded seconds since the end of the latest
+ * confirmed segment with text. Neutral information, never a banner; hidden while paused, before
+ * any text, and under 20 s.
+ */
+export function sinceText(elapsed: number, last: number | null | undefined, paused: boolean): { text: string; warn: boolean } | null {
+  if (paused || last == null || !Number.isFinite(last)) return null;
+  const since = Math.floor(Math.max(0, elapsed - last));
+  if (since < SINCE_TEXT_SHOW) return null;
+  const hours = Math.floor(since / 3600);
+  const minutes = Math.floor((since % 3600) / 60);
+  const seconds = String(since % 60).padStart(2, "0");
+  const clock = hours ? `${hours}:${String(minutes).padStart(2, "0")}:${seconds}` : `${minutes}:${seconds}`;
+  return { text: `上次出字 ${clock} 前`, warn: since > SINCE_TEXT_WARN };
+}

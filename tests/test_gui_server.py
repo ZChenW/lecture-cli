@@ -495,7 +495,7 @@ def test_snapshot_tolerates_missing_and_partial_state_files(tmp_path):
     empty = snapshot(tmp_path)
     assert empty["run_id"] is None and empty["phase"] == "starting" and empty["paused"] is False
     assert empty["asr"]["status"] == "启动中" and empty["asr"]["device_label"] is None
-    assert empty["transcript"] == {"count": 0, "tail": [], "pending": ""}
+    assert empty["transcript"] == {"count": 0, "tail": [], "pending": "", "last_text_seconds": None}
     assert empty["notes"]["worker_alive"] is None and empty["notes"]["latest"] is None
     assert empty["refine"] == {"enabled": False, "status": None, "reason": None, "progress": None,
                               "eta_seconds": None} and empty["stages"] == []
@@ -511,6 +511,7 @@ def test_snapshot_tolerates_missing_and_partial_state_files(tmp_path):
     broken = snapshot(tmp_path)
     assert broken["course"] is None and broken["phase"] == "starting" and broken["notes"]["latest"] is None
     assert broken["transcript"]["count"] == 1
+    assert broken["transcript"]["last_text_seconds"] == 1.0  # plan GUI-4 Q3.1; the half-written line is not read
 
     write_state(tmp_path, "session.json", {"course": "MATH421", "output": "/n/2026-10-07_143000-课堂笔记-a1b2c3.md",
                                            "asr_model": "qwen3-asr-1.7b", "refine": True, "children": [1, 2 ** 22 + 7]})

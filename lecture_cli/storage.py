@@ -120,7 +120,11 @@ def refined_events(directory: Path) -> list[dict] | None:
 
 def final_events(directory: Path) -> list[dict]:
     corrected = refined_events(directory)
-    return corrected if corrected is not None else events(directory)
+    records = corrected if corrected is not None else events(directory)
+    # Plan GUI-4 Q3.4: segments in a weak span (weak-spans.json, written once after class) carry
+    # "[这一段收音很弱，待核对] " wherever the final version is used; the transcript files never do.
+    from .weak_spans import load, mark
+    return mark(records, load(directory))
 
 
 def normalize_markdown(text: str) -> str:
@@ -254,8 +258,12 @@ class Journal:
         for key, value in info.items():
             if key.startswith("review:") and value:
                 review.append(linked_sources(value, transcript_path.name, version))
-        for record in (refined if refined is not None else live_records):
-            if "待核对" in record["text"]:
+        from .weak_spans import MARK, review_line
+        for record in final_events(self.directory):
+            if MARK in record["text"]:
+                # Plan GUI-4 Q3.4: the text of both versions, so the reader can compare them here.
+                review.append(linked_sources(review_line(record, version, live_records), transcript_path.name, version))
+            elif "待核对" in record["text"]:
                 review.append(linked_sources(f"- 未确认的转录 [L{record['id']}]", transcript_path.name, version))
         for line in live.splitlines():
             if "待核对" in line:

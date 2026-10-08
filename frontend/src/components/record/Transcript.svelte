@@ -1,8 +1,11 @@
 <script lang="ts">
-  import { lyrics, tailText } from "../../lib/record";
+  import { lyrics, sinceText, tailText } from "../../lib/record";
   import type { Snapshot } from "../../lib/types";
 
-  let { transcript }: { transcript: Snapshot["transcript"] } = $props();
+  let { transcript, elapsed = 0, paused = false }:
+    { transcript: Snapshot["transcript"]; elapsed?: number; paused?: boolean } = $props();
+  // Plan GUI-4 Q3.1: how long ago text last came, so a lecturer talking while it grows means no sound gets through.
+  let since = $derived(sinceText(elapsed, transcript.last_text_seconds, paused));
   let view = $derived(lyrics(transcript));
   let lines = $state<HTMLElement>();
   let probe = $state<HTMLElement>();
@@ -51,7 +54,10 @@
 </script>
 
 <section class="live">
-  <span class="label">实时转录</span>
+  <div class="head">
+    <span class="label">实时转录</span>
+    {#if since}<span class="since" class:warn={since.warn}>{since.text}</span>{/if}
+  </div>
   <div class="lines" class:clipped bind:this={lines} aria-live="polite">
     {#each view.older as text, i (i)}
       <p class="older size{i + 4 - view.older.length}">{text}</p>
@@ -72,6 +78,9 @@
   .live { flex: 2 1 420px; display: flex; flex-direction: column; justify-content: center; gap: 22px; min-width: 0; min-height: 0; }
   /* Section heading: 0.24em by the user-confirmed rule (form field labels use 0.08em, see base.css). */
   .label { font-size: 12px; letter-spacing: 0.24em; color: #8E9096; }
+  .head { display: flex; align-items: baseline; gap: 16px; flex-wrap: wrap; }
+  .since { font-family: 'Geist Mono', monospace; font-size: 12px; color: #8E9096; }
+  .since.warn { color: #FFB454; }
   /* The reference's lines sit directly in the column; this wrapper keeps the same 22px rhythm. */
   /* HANDOFF 3.3: confirmed lines show in full. When they outgrow the column, the newest stay in view
      and the oldest leave at the top (justify-content: flex-end overflows upward). */

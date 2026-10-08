@@ -34,6 +34,7 @@ from .providers import notes_label
 from . import runs
 from . import config as settings
 from .input_level import summary as weak_input_summary
+from . import weak_spans
 from .mic_gain import restore_volume, start_volume
 from .refinement import UPLOAD_NOTICE as CLOUD_REFINE_UPLOAD, label as refine_label
 
@@ -148,6 +149,11 @@ def reap_stale_sessions() -> None:
                     journal.set_info("warning", "上次录制异常中断；已恢复可取得的文字，未识别的音频未保存。")
                     if weak := weak_input_summary(read_json(directory / "asr-state.json").get("weak_input_seconds")):
                         journal.add_warning(weak)
+                    if spans := weak_spans.load(directory):
+                        # Plan GUI-4 Q3.4: marked segments are announced with their times, not a total.
+                        journal.add_warning(weak_spans.spans_hint(spans))
+                        if weak:
+                            journal.remove_warning(weak)
                     if meta.get("refine") and refined_events(directory) is None:
                         from .refinement import WARNING
                         journal.add_warning(WARNING)
@@ -575,6 +581,11 @@ def session(args, config: dict, course: Path) -> int:
                         console.print(warning, style="yellow", markup=False)
                     if weak := weak_input_summary(state.get("weak_input_seconds")):
                         journal.add_warning(weak)  # Plan N3.4: one sentence, only past two minutes.
+                    if spans := weak_spans.load(directory):
+                        # Plan GUI-4 Q3.4: marked segments are announced with their times, not a total.
+                        journal.add_warning(weak_spans.spans_hint(spans))
+                        if weak:
+                            journal.remove_warning(weak)
                     if meta["refine"] and refined_events(directory) is None:
                         from .refinement import WARNING, SKIPPED
                         # A user skip is not a failure; the notes say which one happened.

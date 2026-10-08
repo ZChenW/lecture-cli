@@ -146,6 +146,7 @@ async def record(directory: Path, transport=None):
         last_write = 0.0
         gain = mic_gain(meta)
         weak = WeakInput()
+        weak.levels_path = directory / "levels.jsonl"  # Plan GUI-4 Q3.2: read by weak_spans after class.
 
         def publish(force=False):
             nonlocal last_write

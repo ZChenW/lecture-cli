@@ -197,6 +197,11 @@ def run(directory: Path) -> int:
             # Plan GUI-4 Q1.2: nothing was recognised, so the notes service is never asked.
             journal.set_info("empty", "yes")
         else:
+            # Plan GUI-4 Q3.3/Q3.5: weak spans mark their segments (final_events) before any final
+            # request; the spans and long stretches without text go into the processing hints.
+            from .weak_spans import analyse
+            for hint in analyse(directory):
+                journal.add_warning(hint)
             generate(journal, final_events(directory), workers=WORKERS)
         journal.render(finished=True)
         detail_status = dict(journal.db.execute("SELECT key, value FROM info")).get("detail_status")

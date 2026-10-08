@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
-  chapterStatus, closingHint, joinText, mergeSegments, closingStages, gainState, refineEta, destinationLine, isTyping, levelShare, lyrics, micPercent, progressOf, pushLevel, savedPath, segmentTime, tailText, updatedAgo,
+  chapterStatus, closingHint, sinceText, joinText, mergeSegments, closingStages, gainState, refineEta, destinationLine, isTyping, levelShare, lyrics, micPercent, progressOf, pushLevel, savedPath, segmentTime, tailText, updatedAgo,
   waveBars, WAVE_BARS,
 } from "./record";
 import type { Snapshot } from "./types";
@@ -190,5 +190,19 @@ describe("closing and end texts", () => {
       .toEqual(["MATH 421", "LectureNotes", "2026-10-07_090200-课堂笔记-f1x7ur.md"]);
     expect(savedPath("/elsewhere/x.md", "LING200")).toEqual(["LING200", "LectureNotes", "x.md"]);
     expect(savedPath(null, "LING200")).toEqual([]);
+  });
+});
+
+describe("time since the last text (plan GUI-4 Q3.1)", () => {
+  it("shows from 20 s, warns past 2 minutes, hides while paused or before any text", () => {
+    expect(sinceText(100, 81, false)).toBeNull();
+    expect(sinceText(100, 80, false)).toEqual({ text: "上次出字 0:20 前", warn: false });
+    expect(sinceText(142.9, 100.4, false)).toEqual({ text: "上次出字 0:42 前", warn: false });
+    expect(sinceText(220, 100, false)).toEqual({ text: "上次出字 2:00 前", warn: false });
+    expect(sinceText(221, 100, false)).toEqual({ text: "上次出字 2:01 前", warn: true });
+    expect(sinceText(4000, 100, false)?.text).toBe("上次出字 1:05:00 前");
+    expect(sinceText(300, 100, true)).toBeNull();
+    expect(sinceText(300, null, false)).toBeNull();
+    expect(sinceText(300, undefined, false)).toBeNull();
   });
 });
