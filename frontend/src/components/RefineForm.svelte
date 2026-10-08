@@ -5,11 +5,12 @@
   import type { ListOption } from "../lib/listbox";
   import { DEFAULT_API_MODEL, QWEN_NOTE, UPLOAD_NOTICE, refineChanges, refineChoice, type RefineChoice } from "../lib/refine";
   import { app, message } from "../lib/state.svelte";
-  import type { AsrModel } from "../lib/types";
+  import type { AsrModel, Result } from "../lib/types";
   import Choices from "./Choices.svelte";
   import KeyField from "./KeyField.svelte";
   import ModelDownload from "./ModelDownload.svelte";
   import Select from "./Select.svelte";
+  import ServiceTest from "./ServiceTest.svelte";
 
   const config = app.boot!.config;
   let choice = $state<RefineChoice>(refineChoice(config));
@@ -20,6 +21,11 @@
   let key = $state("");
   let keyField = $state<KeyField>();
   let models = $state<AsrModel[]>([]);
+  // Plan GUI-3 item 2: test the saved transcription service with the refinement model.
+  let tester = $state<ServiceTest>();
+  let tested = $state<(Result & { signature: string }) | null>(null);
+  let testing = $state(false);
+  let signature = $derived(JSON.stringify([apiModel.trim() || DEFAULT_API_MODEL, key, keyStatus.set]));
   let error = $state("");
   let selected = $derived(models.find((m) => m.name === model));
   let options = $derived<ListOption[]>([
@@ -37,6 +43,13 @@
     }
   }
   load();
+
+  // The address is set in 转录; the link goes there like the settings list does.
+  function toAsr(event: MouseEvent) {
+    event.preventDefault();
+    document.getElementById("asr")?.scrollIntoView({ block: "start" });
+    document.getElementById("asr-title")?.focus({ preventScroll: true });
+  }
 
   export async function save(): Promise<boolean> {
     try {
@@ -66,8 +79,8 @@
   </div>
 
   {#if choice === "api"}
-    <div class="notice" role="note">
-      <p class="upload">{UPLOAD_NOTICE}</p>
+    <div class="notice">
+      <p class="first">{UPLOAD_NOTICE}</p>
       <p>{QWEN_NOTE}。转录服务的地址和 key 与「转录」一节相同。</p>
     </div>
     <div class="grid">
@@ -77,10 +90,16 @@
       </label>
       <div class="field">
         <span id="refine-service">转录服务</span>
-        <div class="input mono readonly" role="textbox" aria-readonly="true" aria-labelledby="refine-service">{config.asr_api_base}</div>
+        <!-- Not editable here, so it is plain text, not something that looks like a field. -->
+        <p class="readonly">
+          <span class="mono address">{config.asr_api_base}</span>
+          <a href="#/settings" onclick={toAsr}>在「转录」一节修改</a>
+        </p>
       </div>
     </div>
-    <KeyField kind="asr" bind:status={keyStatus} bind:value={key} bind:this={keyField} />
+    <KeyField kind="asr" bind:status={keyStatus} bind:value={key} bind:this={keyField} {testing} ontest={() => tester?.run()} />
+    <ServiceTest bind:this={tester} kind="asr" provider={config.asr_provider} apiBase={config.asr_api_base}
+      model={apiModel.trim() || DEFAULT_API_MODEL} {key} {signature} bind:result={tested} bind:busy={testing} />
   {:else if choice === "local"}
     <div class="grid">
       <div class="field">
@@ -105,10 +124,12 @@
   .form { display: flex; flex-direction: column; gap: 28px; }
   .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(220px, 100%), 1fr)); gap: 28px 32px; }
   .warn-text.field-note { color: var(--warn); }
-  /* Monochrome like the rest of design D: a black rule and weight, not a coloured card. */
-  .notice { border-left: 2px solid #111111; padding: 2px 0 2px 14px; display: flex; flex-direction: column; gap: 4px; }
-  .notice p { margin: 0; font-size: 13px; line-height: 1.7; color: #5C5C5A; }
-  .notice .upload { font-size: 15px; font-weight: 600; color: #111111; }
-  /* Read-only: a dotted rule, so it does not read as a field to type in. */
-  .readonly { display: block; line-height: 44px; border-bottom-style: dotted; color: #5C5C5A; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  /* Plan GUI-3 item 2: two plain lines, no rule or indent; the first in body colour. */
+  .notice { display: flex; flex-direction: column; gap: 2px; }
+  .notice p { margin: 0; font-size: 13px; line-height: 1.7; color: var(--muted); }
+  .notice .first { font-size: 14px; color: var(--text); }
+  /* One line of monospace text and a link, like the other read-only details. */
+  .readonly { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 16px; min-height: 44px; margin: 0; padding-top: 10px; font-size: 14px; }
+  .readonly .address { color: var(--text); overflow-wrap: anywhere; }
+  .readonly a { color: var(--fg); text-underline-offset: 4px; white-space: nowrap; }
 </style>

@@ -56,7 +56,8 @@
       </p>
     {:else if kind === "unsaved"}
       <p class="callout" role="alert">
-        笔记尚未成功保存，暂存于 <span class="mono">{record.workspace_kept ?? "临时目录"}</span>；恢复目标目录可写后重新打开 Lecture 会自动恢复
+        <span class="dot" aria-hidden="true"></span>
+        <span>笔记尚未成功保存，暂存于 <span class="mono">{record.workspace_kept ?? "临时目录"}</span>；恢复目标目录可写后重新打开 Lecture 会自动恢复</span>
       </p>
     {:else}
       <p class="path">退出码 {record.exit_code ?? "未知"}</p>
@@ -113,14 +114,19 @@
   .segment .name { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
   .sep { flex: none; color: #8E9096; }
   .mono { font-family: 'Geist Mono', monospace; font-size: 13px; overflow-wrap: anywhere; }
+  /* Plan GUI-3 item 2: no left bars anywhere; the warning banner's surface and dot (plan N2) instead. */
   .callout {
+    display: flex;
+    align-items: baseline;
+    gap: 12px;
     padding: 18px 20px;
-    border-left: 2px solid #FFB454;
+    border-radius: 10px;
     background: rgba(255, 255, 255, 0.04);
     color: #ECEAE4;
     font-size: 15px;
     line-height: 1.65;
   }
+  .callout .dot { flex: none; width: 6px; height: 6px; border-radius: 50%; background: #FFB454; transform: translateY(-2px); }
   .log {
     margin: 0;
     max-height: 384px;  /* Twenty unwrapped lines. */
