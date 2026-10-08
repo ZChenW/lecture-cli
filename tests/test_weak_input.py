@@ -1,6 +1,8 @@
 """N3.4: a GUI-only notice after 30 s of weak input while someone is talking."""
 import asyncio
+import re
 import sys
+from pathlib import Path
 from types import SimpleNamespace
 
 import httpx
@@ -272,3 +274,12 @@ def test_cloud_backend_raises_it_when_the_service_returns_no_text(tmp_path, monk
     assert api_capture.run(tmp_path, transport=httpx.MockTransport(handle)) == 0
     state = read_json(tmp_path / "asr-state.json")
     assert state["weak_input"] == NO_SIGNAL and state["weak_input_seconds"] == 0
+
+
+def test_the_recording_screen_names_each_notice_by_its_opening_words():
+    """frontend/src/lib/format.ts weakLabel tells the start notices apart by how they begin; if a
+    notice text changes here, the microphone cell would fall back to "声音很弱"."""
+    source = (Path(__file__).resolve().parents[1] / "frontend/src/lib/format.ts").read_text()
+    prefixes = re.findall(r'text\.startsWith\("([^"]+)"\)', source)
+    assert len(prefixes) == 2
+    assert NO_SPEECH.startswith(prefixes[0]) and NO_SIGNAL.startswith(prefixes[1])

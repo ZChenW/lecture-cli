@@ -6,16 +6,18 @@
   // text stays in the main colour. Warnings close with the icon button; errors cannot be closed.
   let { asr }: { asr: Snapshot["asr"] } = $props();
   let dismissed = $state<string[]>([]);
-  let weakClosed = $state(false);
+  // The weak-input text that was closed: the start-of-recording notice (plan GUI-3 item 5) and the
+  // weak-input one share the field, so a different text shows again.
+  let weakClosed = $state<string | null>(null);
   let items = $derived(bannerItems(asr).filter((item) => item.kind === "error" ||
-    (item.kind === "weak" ? !weakClosed : !dismissed.includes(item.text))));
+    (item.kind === "weak" ? item.text !== weakClosed : !dismissed.includes(item.text))));
   // Plan N3.4: a closed weak-input banner comes back if the input recovers and later turns weak again.
   $effect(() => {
-    if (!asr.weak_input) weakClosed = false;
+    if (!asr.weak_input) weakClosed = null;
   });
 
   function close(item: { kind: string; text: string }) {
-    if (item.kind === "weak") weakClosed = true;
+    if (item.kind === "weak") weakClosed = item.text;
     else dismissed = [...dismissed, item.text];
   }
 </script>
