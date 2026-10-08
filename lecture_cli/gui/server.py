@@ -143,6 +143,19 @@ def key_environment() -> dict:
     return environ
 
 
+SAMPLE = "这是 Lecture 设置页“试一下”打开的示例文件，可以直接关闭。\n"
+
+
+def sample_file() -> Path:
+    """A harmless file in the state directory for trying an editor; never a user's note."""
+    directory = Path(os.environ.get("XDG_STATE_HOME", Path.home() / ".local" / "state")) / "lecture-cli"
+    directory.mkdir(parents=True, exist_ok=True)
+    path = directory / "试一下.md"
+    if not path.is_file() or path.read_text(encoding="utf-8", errors="replace") != SAMPLE:
+        path.write_text(SAMPLE, encoding="utf-8")
+    return path
+
+
 def courses_root(config: dict) -> Path:
     root = config.get("courses_dir")
     if not root or not Path(root).expanduser().is_dir():
@@ -223,6 +236,7 @@ def create_app(port: int, token: str, *, on_quit=None, sessions: Sessions | None
         config = settings.load()
         key_state = keys()
         return JSONResponse({"version": version(), "configured": settings.is_configured(config, key_state),
+                             "missing": settings.missing(config, key_state),
                              "problems": problems_of(config), "config": config, "keys": key_state,
                              "active_run": await active_snapshot(),
                              "presets": {"notes": NOTES_PRESETS, "asr": ASR_PRESETS}})
@@ -243,8 +257,10 @@ def create_app(port: int, token: str, *, on_quit=None, sessions: Sessions | None
             return error_response(422, "invalid_config", found[0].message, found[0].field,
                                   problems=[{"field": p.field, "message": p.message} for p in found])
         settings.save(merged)
+        key_state = keys()
         return JSONResponse({"config": merged, "problems": problems_of(merged),
-                             "configured": settings.is_configured(merged, keys())})
+                             "configured": settings.is_configured(merged, key_state),
+                             "missing": settings.missing(merged, key_state)})
 
     async def put_key(request):
         kind = kind_of(request)
@@ -255,6 +271,14 @@ def create_app(port: int, token: str, *, on_quit=None, sessions: Sessions | None
             return JSONResponse(settings.write_key(kind, value))
         except ValueError as exc:
             raise ApiError(422, "invalid_key", str(exc), "value")
+
+    async def persist_key(request):
+        kind = kind_of(request)
+        try:
+            # The value goes from this process's environment straight to the key file.
+            return JSONResponse(await run_in_threadpool(settings.persist_key, kind))
+        except LookupError:
+            raise ApiError(409, "key_not_from_env", "只有来自环境变量的 key 需要保存到本机")
 
     async def delete_key(request):
         kind = kind_of(request)
@@ -444,6 +468,28 @@ def create_app(port: int, token: str, *, on_quit=None, sessions: Sessions | None
     async def list_openers(request):
         return JSONResponse(await run_in_threadpool(openers.describe, settings.load()))
 
+    async def try_opener(request):
+        kind = request.path_params["kind"]
+        if kind not in desktop.TABLES:
+            raise ApiError(404, "not_found", "未知的打开方式")
+        body = await body_of(request)
+        program = body.get("program")
+        if set(body) - {"program"} or not (program is None or isinstance(program, str)):
+            raise ApiError(422, "invalid_request", "只需要 program（固定表中的程序名，或 null 表示自动）", "program")
+        config = settings.load()
+        root = config.get("courses_dir")
+        folder = Path(root).expanduser() if root and Path(root).expanduser().is_dir() else Path.home()
+        # The target is chosen here, never by the page: the courses folder, or a sample file for editors.
+        target = folder if kind != "editor" else await run_in_threadpool(sample_file)
+        try:
+            return JSONResponse(await run_in_threadpool(openers.trial, config, kind, program, target))
+        except ValueError as exc:
+            raise ApiError(422, "invalid_request", str(exc), "program")
+        except desktop.Unavailable as exc:
+            raise ApiError(503, "unavailable", str(exc))
+        except OSError as exc:
+            raise ApiError(503, "unavailable", f"无法启动程序：{exc.strerror or exc}")
+
     async def delete_note(request):
         root = courses_root(settings.load())
         candidate = request.query_params.get("path", "")
@@ -476,6 +522,7 @@ def create_app(port: int, token: str, *, on_quit=None, sessions: Sessions | None
         Route("/api/config", put_config, methods=["PUT"]),
         Route("/api/keys/{kind}", put_key, methods=["PUT"]),
         Route("/api/keys/{kind}", delete_key, methods=["DELETE"]),
+        Route("/api/keys/{kind}/persist", persist_key, methods=["POST"]),
         Route("/api/test/{kind}", test_service, methods=["POST"]),
         Route("/api/courses", list_courses),
         Route("/api/courses", add_course, methods=["POST"]),
@@ -494,6 +541,7 @@ def create_app(port: int, token: str, *, on_quit=None, sessions: Sessions | None
         Route("/api/notes/content", note_content),
         Route("/api/open", open_path, methods=["POST"]),
         Route("/api/openers", list_openers),
+        Route("/api/openers/{kind}/try", try_opener, methods=["POST"]),
         Route("/api/quit", quit_app, methods=["POST"]),
         Route("/api/{rest:path}", unknown_api, methods=["GET", "POST", "PUT", "DELETE"]),
         Mount("/", StaticFiles(directory=STATIC, html=True)),

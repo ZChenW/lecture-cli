@@ -99,7 +99,7 @@ def test_fresh_configuration_has_no_courses_dir_and_writes_nothing(isolated):
 def test_legacy_key_sources_still_work(isolated, monkeypatch):
     isolated.mkdir(parents=True)
     (isolated / "api-key").write_text(" legacy-file-key \n")
-    assert config.key_status("notes") == {"set": True, "source": "file", "tail": "-key"}
+    assert config.key_status("notes") == {"set": True, "source": "file", "tail": "-key", "variable": None, "stored": True}
     config.load_keys()
     assert os.environ["LECTURE_NOTES_API_KEY"] == "legacy-file-key"
     monkeypatch.delenv("LECTURE_NOTES_API_KEY")
@@ -120,7 +120,7 @@ def test_new_key_names_take_precedence(isolated, monkeypatch):
 
 def test_write_and_delete_keys_never_touch_environment(isolated, monkeypatch):
     status = config.write_key("asr", "  secret-asr-1234 \n")
-    assert status == {"set": True, "source": "file", "tail": "1234"}
+    assert status == {"set": True, "source": "file", "tail": "1234", "variable": None, "stored": True}
     path = isolated / "asr-api-key"
     assert path.read_text() == "secret-asr-1234\n"
     assert stat.S_IMODE(path.stat().st_mode) == 0o600
@@ -128,7 +128,7 @@ def test_write_and_delete_keys_never_touch_environment(isolated, monkeypatch):
         config.write_key("notes", "   ")
     (isolated / "api-key").write_text("legacy\n")
     config.write_key("notes", "fresh")
-    assert config.delete_key("notes") == {"set": False, "source": None, "tail": None}
+    assert config.delete_key("notes") == {"set": False, "source": None, "tail": None, "variable": None, "stored": False}
     assert not (isolated / "api-key").exists() and not (isolated / "notes-api-key").exists()
     monkeypatch.setenv("LECTURE_ASR_API_KEY", "from-env")
     assert config.delete_key("asr")["source"] == "env"

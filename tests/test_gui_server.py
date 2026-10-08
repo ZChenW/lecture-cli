@@ -205,7 +205,7 @@ def test_bootstrap_on_empty_configuration(home, serve):
     data = app.client.get("/api/bootstrap").json()
     assert data["configured"] is False and data["active_run"] is None
     assert {"field": "courses_dir", "message": "尚未设置课程目录"} in data["problems"]
-    assert data["keys"]["notes"] == {"set": False, "source": None, "tail": None}
+    assert data["keys"]["notes"] == {"set": False, "source": None, "tail": None, "variable": None, "stored": False}
     assert data["config"]["courses_dir"] is None and "deepseek" in data["presets"]["notes"]
     assert data["version"]
 
@@ -238,7 +238,7 @@ def test_key_endpoints_never_return_key_values(home, serve, tmp_path, monkeypatc
     app = serve(transport=httpx.MockTransport(service))
     app.login()
     response = app.client.put("/api/keys/notes", json={"value": SECRET}, headers=app.origin)
-    assert response.json() == {"set": True, "source": "file", "tail": "1234"}
+    assert response.json() == {"set": True, "source": "file", "tail": "1234", "variable": None, "stored": True}
     assert (tmp_path / "config" / "lecture-cli" / "notes-api-key").stat().st_mode & 0o777 == 0o600
     assert app.client.put("/api/keys/notes", json={"value": " "}, headers=app.origin).status_code == 422
     texts = [response.text, app.client.get("/api/bootstrap").text]

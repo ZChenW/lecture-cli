@@ -37,6 +37,8 @@ DEFAULTS = {
     "editor": None,
     # Per-course remembered choices, e.g. {"MATH421": {"language": "zh"}}.
     "course_settings": {},
+    # The GUI's first-run setup was finished or skipped; afterwards the app opens at home.
+    "onboarded": False,
 }
 # Environment variables first, then files in the configuration directory; legacy names last.
 KEY_SOURCES = {
@@ -49,7 +51,9 @@ KEY_VARIABLES = {"notes": "LECTURE_NOTES_API_KEY", "asr": "LECTURE_ASR_API_KEY"}
 
 # Fields only the GUI uses; command-line lectures never stop on them.
 GUI_ONLY = ("courses_dir", "file_manager", "terminal", "editor", "file_manager_command", "terminal_command",
-            "editor_command", "course_settings")
+            "editor_command", "course_settings", "onboarded")
+# What a lecture cannot start without, in the order the GUI lists them.
+REQUIRED = ("courses_dir", "notes_key", "asr_key")
 
 
 @dataclass(frozen=True)
@@ -145,6 +149,8 @@ def validate(config: dict) -> list[Problem]:
     problems += [Problem(field, message) for field, message in opener_problems(config)]
     if not course_settings_valid(config.get("course_settings")):
         problems.append(Problem("course_settings", "course_settings 必须形如 {\"课程名\": {\"language\": \"zh\"}}"))
+    if not isinstance(config.get("onboarded"), bool):
+        problems.append(Problem("onboarded", "onboarded 必须是 true 或 false"))
     return problems
 
 
@@ -171,30 +177,54 @@ def remember_course_language(course: str, language: str) -> None:
     save({**current, "course_settings": remembered})
 
 
-def is_configured(config: dict, keys: dict) -> bool:
-    """keys maps "notes"/"asr" to key_status() results."""
+def missing(config: dict, keys: dict) -> list[str]:
+    """The REQUIRED items still unset; keys maps "notes"/"asr" to key_status() results."""
     root = config.get("courses_dir")
-    return (bool(root) and Path(root).expanduser().is_dir() and keys["notes"]["set"]
-            and (config.get("asr_backend") != "api" or keys["asr"]["set"]))
+    found = []
+    if not root or not Path(root).expanduser().is_dir():
+        found.append("courses_dir")
+    if not keys["notes"]["set"]:
+        found.append("notes_key")
+    if config.get("asr_backend") == "api" and not keys["asr"]["set"]:
+        found.append("asr_key")
+    return found
 
 
-def read_key(kind: str) -> tuple[str, str | None]:
+def is_configured(config: dict, keys: dict) -> bool:
+    return not missing(config, keys)
+
+
+def key_origin(kind: str) -> tuple[str, str | None, str | None]:
+    """(value, "env" or "file" or None, the environment variable that supplied it)."""
     variables, filenames = KEY_SOURCES[kind]
     for variable in variables:
         if value := os.environ.get(variable, "").strip():
-            return value, "env"
-    for filename in filenames:
+            return value, "env", variable
+    stored = stored_key(kind)
+    return stored, ("file" if stored else None), None
+
+
+def stored_key(kind: str) -> str:
+    for filename in KEY_SOURCES[kind][1]:
         try:
             if value := (config_dir() / filename).read_text().strip():
-                return value, "file"
+                return value
         except FileNotFoundError:
             continue
-    return "", None
+    return ""
+
+
+def read_key(kind: str) -> tuple[str, str | None]:
+    value, source, _ = key_origin(kind)
+    return value, source
 
 
 def key_status(kind: str) -> dict:
-    value, source = read_key(kind)
-    return {"set": bool(value), "source": source, "tail": value[-4:] if value else None}
+    """Never the key itself: whether it is set, where from, its last four characters, and whether a
+    key file holds the same value (so starting from the application menu finds it too)."""
+    value, source, variable = key_origin(kind)
+    return {"set": bool(value), "source": source, "tail": value[-4:] if value else None,
+            "variable": variable, "stored": bool(value) and stored_key(kind) == value}
 
 
 def write_key(kind: str, value: str) -> dict:
@@ -206,6 +236,14 @@ def write_key(kind: str, value: str) -> dict:
     # mkstemp creates the file with mode 600 before any byte is written.
     atomic_text(directory / KEY_SOURCES[kind][1][0], value + "\n")
     return key_status(kind)
+
+
+def persist_key(kind: str) -> dict:
+    """Write the key from the environment into the key file; the value never leaves this process."""
+    value, source, _ = key_origin(kind)
+    if source != "env":
+        raise LookupError("该 key 不是来自环境变量")
+    return write_key(kind, value)
 
 
 def delete_key(kind: str) -> dict:

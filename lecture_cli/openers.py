@@ -157,3 +157,13 @@ class Openers:
             return {"ok": True, "via": "terminal"}
         self.launch(config, "editor", path)
         return {"ok": True, "via": "editor"}
+
+    def trial(self, config: dict, kind: str, program: str | None, target: Path) -> dict:
+        """Launch one kind with a program chosen in the settings page but not saved yet.
+        program is a table name or None (automatic); a *_command from config.json still wins."""
+        if program is not None and program not in TABLES[kind]:
+            raise ValueError(f"{LABELS[kind]}必须是 " + "、".join(TABLES[kind]) + " 之一，或留空自动选择")
+        chosen = {**config, kind: program}
+        argv = self.launch(chosen, kind, target)
+        return {"ok": True, "program": None if custom_command(chosen, kind) else self.effective(chosen, kind),
+                "argv0": argv[0]}

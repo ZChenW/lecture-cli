@@ -67,11 +67,44 @@ def attachment_file(path: Path, kind: str) -> Path | None:
     return next(iter(attachment_files(path, kind)), None)
 
 
+# Sections of the review file that record how the note was made, not points to check.
+PROCESS_SECTIONS = ("## 处理提示", "## 离线校正")
+LIST_ITEM = re.compile(r"^(?:[-*+]|\d+[.)])\s")
+
+
+def review_count(text: str) -> int:
+    """Points to check in a .review.md: each top-level list item, each unsorted transcript range
+    (## 待整理原文) and each other plain paragraph. Processing notices and quoted source lines
+    are not counted."""
+    count, process = 0, False
+    for block in re.split(r"\n\s*\n", text):
+        block = block.strip()
+        if not block or block.startswith("# "):
+            continue
+        if block.startswith("#"):
+            process = block.startswith(PROCESS_SECTIONS)
+            count += block.startswith("## 待整理原文")
+            continue
+        items = sum(1 for line in block.splitlines() if LIST_ITEM.match(line))
+        if items:
+            process = False  # Model review items follow the notices without a heading of their own.
+            count += items
+        elif not process and not block.startswith(">"):
+            count += 1
+    return count
+
+
 def note_entry(path: Path) -> dict:
     match = NOTE_NAME.match(path.stem)
     started = f"{match[1]}T{match[2]}:{match[3]}:{match[4]}" if match else None
+    review = attachment_file(path, "review")
+    try:
+        reviews = review_count(review.read_text(encoding="utf-8", errors="replace")) if review else 0
+    except OSError:
+        reviews = 0
     return {"name": path.name, "path": str(path), "started": started, "kind": match[5] if match else None,
-            "attachments": {kind: attachment_file(path, kind) is not None for kind in ATTACHMENTS}}
+            "attachments": {kind: attachment_file(path, kind) is not None for kind in ATTACHMENTS},
+            "review_count": reviews}
 
 
 def notes(root, course: Path) -> list[dict]:
