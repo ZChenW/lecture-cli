@@ -464,6 +464,32 @@ def create_app(port: int, token: str, *, on_quit=None, sessions: Sessions | None
         root = courses_root(settings.load())
         return JSONResponse(await run_in_threadpool(library.content, root, request.query_params.get("path", "")))
 
+    async def get_review(request):
+        from . import review
+        root = courses_root(settings.load())
+
+        def read():
+            return review.items(library.review_file(root, request.query_params.get("path", "")))
+        return JSONResponse(await run_in_threadpool(read))
+
+    async def put_review(request):
+        from . import review
+        root = courses_root(settings.load())
+        checked = (await body_of(request)).get("checked")
+        if not isinstance(checked, list) or not all(isinstance(item, str) for item in checked):
+            raise ApiError(422, "invalid_request", "checked 必须是条目 id 的列表", "checked")
+
+        def write():
+            return review.save_checked(library.review_file(root, request.query_params.get("path", "")), checked)
+        try:
+            return JSONResponse(await run_in_threadpool(write))
+        except PermissionError as exc:
+            raise ApiError(403, "forbidden", str(exc))
+        except ValueError as exc:
+            if isinstance(exc, library.Forbidden):
+                raise
+            raise ApiError(422, "unknown_item", str(exc), "checked")
+
     async def open_path(request):
         body = await body_of(request)
         config = settings.load()
@@ -556,6 +582,8 @@ def create_app(port: int, token: str, *, on_quit=None, sessions: Sessions | None
         Route("/api/notes", list_notes),
         Route("/api/notes", delete_note, methods=["DELETE"]),
         Route("/api/notes/content", note_content),
+        Route("/api/notes/review", get_review),
+        Route("/api/notes/review", put_review, methods=["PUT"]),
         Route("/api/open", open_path, methods=["POST"]),
         Route("/api/openers", list_openers),
         Route("/api/openers/{kind}/try", try_opener, methods=["POST"]),

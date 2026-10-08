@@ -6,7 +6,8 @@ import re
 import shutil
 import subprocess
 
-from ..storage import ATTACHMENTS, attachment_path, legacy_attachment_path
+from ..storage import ATTACHMENTS, attachment_path, legacy_attachment_path, review_state_path
+from . import review as checklist
 
 TRASH_TIMEOUT = 30
 # 2026-10-07_143000-课堂笔记-a1b2c3, as written by cli.session().
@@ -67,44 +68,24 @@ def attachment_file(path: Path, kind: str) -> Path | None:
     return next(iter(attachment_files(path, kind)), None)
 
 
-# Sections of the review file that record how the note was made, not points to check.
-PROCESS_SECTIONS = ("## 处理提示", "## 离线校正")
-LIST_ITEM = re.compile(r"^(?:[-*+]|\d+[.)])\s")
-
-
 def review_count(text: str) -> int:
     """Points to check in a .review.md: each top-level list item, each unsorted transcript range
     (## 待整理原文) and each other plain paragraph. Processing notices and quoted source lines
     are not counted."""
-    count, process = 0, False
-    for block in re.split(r"\n\s*\n", text):
-        block = block.strip()
-        if not block or block.startswith("# "):
-            continue
-        if block.startswith("#"):
-            process = block.startswith(PROCESS_SECTIONS)
-            count += block.startswith("## 待整理原文")
-            continue
-        items = sum(1 for line in block.splitlines() if LIST_ITEM.match(line))
-        if items:
-            process = False  # Model review items follow the notices without a heading of their own.
-            count += items
-        elif not process and not block.startswith(">"):
-            count += 1
-    return count
+    return len(checklist.parse(text)[0])
 
 
 def note_entry(path: Path) -> dict:
     match = NOTE_NAME.match(path.stem)
     started = f"{match[1]}T{match[2]}:{match[3]}:{match[4]}" if match else None
-    review = attachment_file(path, "review")
     try:
-        reviews = review_count(review.read_text(encoding="utf-8", errors="replace")) if review else 0
+        # Plan GUI-3 item 4: the count is what is still unticked; the total is every point.
+        unchecked, total = checklist.counts(attachment_file(path, "review"))
     except OSError:
-        reviews = 0
+        unchecked, total = 0, 0
     return {"name": path.name, "path": str(path), "started": started, "kind": match[5] if match else None,
             "attachments": {kind: attachment_file(path, kind) is not None for kind in ATTACHMENTS},
-            "review_count": reviews}
+            "review_count": unchecked, "review_total": total}
 
 
 def notes(root, course: Path) -> list[dict]:
@@ -158,6 +139,24 @@ def content(root, candidate) -> dict:
     return result
 
 
+def review_file(root, candidate) -> Path:
+    """The review attachment of a note, by the note's path; the same path rules as content()."""
+    review = attachment_file(note_path(root, candidate), "review")
+    if review is None:
+        raise NotFound("这份笔记没有待核对记录")
+    return inside(root, review)
+
+
+def review_state_files(path: Path) -> list[Path]:
+    """Tick records beside either layout's review file, whether or not that file still exists."""
+    found = []
+    for review in (attachment_path(path, "review"), legacy_attachment_path(path, "review")):
+        state = review_state_path(review)
+        if not state.parent.is_symlink() and not state.is_symlink() and state.is_file():
+            found.append(state)
+    return found
+
+
 def trash_note(root, candidate, *, which=shutil.which, run=subprocess.run) -> list[str]:
     """Move a note and its attachments (both layouts) to the desktop trash; never delete outright."""
     unresolved = Path(candidate).expanduser() if isinstance(candidate, str) else Path()
@@ -169,7 +168,8 @@ def trash_note(root, candidate, *, which=shutil.which, run=subprocess.run) -> li
     if not which("gio"):
         raise TrashUnavailable("未找到 gio，无法移到回收站；为免永久删除，未做任何改动。")
     # Attachments first: the main note never outlives the files it links to.
-    targets = [inside(root, item) for kind in ATTACHMENTS for item in attachment_files(path, kind)] + [path]
+    targets = ([inside(root, item) for kind in ATTACHMENTS for item in attachment_files(path, kind)]
+               + [inside(root, item) for item in review_state_files(path)] + [path])
     try:
         result = run(["gio", "trash", "--", *map(str, targets)], stdin=subprocess.DEVNULL,
                      capture_output=True, text=True, timeout=TRASH_TIMEOUT)

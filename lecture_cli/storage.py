@@ -24,6 +24,11 @@ def legacy_attachment_path(output: Path, kind: str) -> Path:
     return output.with_suffix(f".{kind}.md")
 
 
+def review_state_path(review: Path) -> Path:
+    """Which review points the reader ticked: kept beside the .review.md it describes, never inside it."""
+    return review.with_name(review.name.removesuffix(".review.md") + ".review-state.json")
+
+
 def linked_sources(text: str, filename: str, version: str) -> str:
     return CITATION.sub(
         lambda m: f"[{version}-{m[0][1:-1]}]({quote(filename)}#{version}-L{m[1]})", text)

@@ -26,7 +26,7 @@ from rich.table import Table
 from rich.text import Text
 
 from .storage import (ATTACHMENT_DIR, ATTACHMENTS, Journal, attachment_path, events, final_events,
-                      refined_events, read_json, write_json)
+                      refined_events, read_json, review_state_path, write_json)
 from .audio_buffer import drain_timeout
 from .asr import QWEN_MODELS, asr_models, resolve_asr_model, capture_python, capture_environment
 from .glossary import load_glossary
@@ -63,7 +63,9 @@ def discard_requested(directory: Path) -> bool:
 def discard_outputs(output: Path) -> list[str]:
     """Delete exactly this run's note and attachments; returns paths that could not be removed."""
     failed = []
-    for path in [output] + [attachment_path(output, kind) for kind in ATTACHMENTS]:
+    # Plan GUI-3 item 4: ticks a reader made while the lecture was still recording go too.
+    for path in [output] + [attachment_path(output, kind) for kind in ATTACHMENTS] \
+            + [review_state_path(attachment_path(output, "review"))]:
         try:
             names = os.listdir(path.parent)
         except FileNotFoundError:
