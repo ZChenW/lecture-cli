@@ -6,7 +6,18 @@
   // text stays in the main colour. Warnings close with the icon button; errors cannot be closed.
   let { asr }: { asr: Snapshot["asr"] } = $props();
   let dismissed = $state<string[]>([]);
-  let items = $derived(bannerItems(asr).filter((item) => item.kind === "error" || !dismissed.includes(item.text)));
+  let weakClosed = $state(false);
+  let items = $derived(bannerItems(asr).filter((item) => item.kind === "error" ||
+    (item.kind === "weak" ? !weakClosed : !dismissed.includes(item.text))));
+  // Plan N3.4: a closed weak-input banner comes back if the input recovers and later turns weak again.
+  $effect(() => {
+    if (!asr.weak_input) weakClosed = false;
+  });
+
+  function close(item: { kind: string; text: string }) {
+    if (item.kind === "weak") weakClosed = true;
+    else dismissed = [...dismissed, item.text];
+  }
 </script>
 
 {#if items.length}
@@ -17,7 +28,7 @@
         <span class="visually-hidden">{item.kind === "error" ? "错误：" : "提示："}</span>
         <p>{item.text}</p>
         {#if item.kind !== "error"}
-          <button class="close" aria-label="关闭这条提示" title="关闭" onclick={() => (dismissed = [...dismissed, item.text])}>
+          <button class="close" aria-label="关闭这条提示" title="关闭" onclick={() => close(item)}>
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"
               stroke-linecap="round" aria-hidden="true"><path d="M7 7l10 10M17 7L7 17" /></svg>
           </button>

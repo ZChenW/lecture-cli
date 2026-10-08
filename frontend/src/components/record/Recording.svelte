@@ -14,6 +14,7 @@
   let backlog = $derived(snapshot.asr.backlog_seconds);
   let slow = $derived(backlog > BACKLOG_WARN_SECONDS);
   let gain = $derived(gainState(snapshot.asr));
+  let weak = $derived(snapshot.asr.weak_input ?? "");
   let estimate = $derived(closingHint(snapshot.closing_estimate_seconds));
 </script>
 
@@ -44,9 +45,11 @@
     </div>
     <div class="stat">
       <span class="key">麦克风音量</span>
-      <span class="value">{micPercent(snapshot.asr.level)}</span>
+      <span class="value" class:warn={weak}>{micPercent(snapshot.asr.level)}</span>
+      <!-- Plan N3.4: weak input turns the cell to the warning colour; the full text is the tooltip. -->
+      {#if weak}<span class="sub warn" title={weak}>声音很弱<span class="visually-hidden">：{weak}</span></span>
       <!-- The automatic volume notice, formerly a banner (plan N2.5); its full text is the tooltip. -->
-      {#if gain}<span class="sub" title={gain.detail}>{gain.cell}<span class="visually-hidden">：{gain.detail}</span></span>{/if}
+      {:else if gain}<span class="sub" title={gain.detail}>{gain.cell}<span class="visually-hidden">：{gain.detail}</span></span>{/if}
     </div>
   </div>
   <div class="controls">
@@ -97,6 +100,7 @@
   .value.warn { color: #FFB454; }
   .slow { font-size: 12px; color: #FFB454; }
   .sub { font-size: 12px; color: #8E9096; }
+  .sub.warn { color: #FFB454; }
   .controls { display: flex; align-items: center; gap: 12px; }
   .pause, .stop {
     height: 56px;

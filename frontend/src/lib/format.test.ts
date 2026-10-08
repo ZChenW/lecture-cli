@@ -29,6 +29,14 @@ describe("snapshot view mapping", () => {
     expect(bannerItems({ ...asr, notices: [muted] })).toEqual([muted]);
   });
 
+  it("adds the weak-input notice as its own closable banner (plan N3.4)", () => {
+    const asr = { status: "", device_label: null, model: null, level: 0, backlog_seconds: 0, queued_seconds: 0, error: null,
+      notices: [{ kind: "warning", text: "音频设备报告 2 次输入丢帧" }] };
+    const weak = "收到的声音很弱，转录可能不准。请把麦克风靠近讲话人，或调高输入音量";
+    expect(bannerItems({ ...asr, weak_input: weak })).toEqual([asr.notices[0], { kind: "weak", text: weak }]);
+    expect(bannerItems({ ...asr, weak_input: null })).toEqual(asr.notices);
+  });
+
   it("formats note times from file names", () => {
     expect(formatNoteTime("2026-10-07T09:05:00")).toBe("2026年10月7日 09:05");
     expect(formatNoteTime(null)).toBe("时间未知");

@@ -5,7 +5,25 @@
   let { transcript }: { transcript: Snapshot["transcript"] } = $props();
   let view = $derived(lyrics(transcript));
   let lines = $state<HTMLElement>();
+  let probe = $state<HTMLElement>();
+  let small = $state(false);
   let shown = "";
+  let currentText = $derived(tailText(view.current));
+
+  // Plan N3.3: past two lines at 38px the current line drops to 30px. A hidden copy is always laid
+  // out at 38px, so the decision never flips back and forth with the smaller size.
+  $effect(() => {
+    if (!probe) return;
+    const element = probe;
+    const measure = () => {
+      const lineHeight = parseFloat(getComputedStyle(element).lineHeight) || 47.5;
+      small = element.getBoundingClientRect().height > lineHeight * 2 + 1;
+    };
+    const observer = new ResizeObserver(measure);
+    observer.observe(element);
+    measure();
+    return () => observer.disconnect();
+  });
 
   // A newly confirmed segment lifts the whole block: 300 ms shift and fade (plan 6.2).
   $effect(() => {
@@ -25,7 +43,10 @@
       <p class="older size{i + 4 - view.older.length}">{text}</p>
     {/each}
     {#if view.current}
-      <p class="current">{tailText(view.current)}{#if view.live}<span class="cursor" aria-hidden="true"></span>{/if}</p>
+      <div class="current-wrap">
+        <p class="current" class:small>{currentText}{#if view.live}<span class="cursor" aria-hidden="true"></span>{/if}</p>
+        <p class="current probe" bind:this={probe} aria-hidden="true">{currentText}{#if view.live}<span class="cursor"></span>{/if}</p>
+      </div>
     {:else}
       <p class="current waiting">等待语音…</p>
     {/if}
@@ -48,6 +69,9 @@
   .size2 { font-size: 24px; color: #7E8087; }
   .size3 { font-size: 26px; color: #A9ABB0; }
   .current { flex: none; font-size: 38px; line-height: 1.25; font-weight: 400; letter-spacing: -0.01em; color: #FFFFFF; text-wrap: pretty; }
+  .current.small { font-size: 30px; }
+  .current-wrap { position: relative; flex: none; }
+  .probe { position: absolute; top: 0; left: 0; right: 0; visibility: hidden; pointer-events: none; }
   .waiting { color: #8E9096; }
   .cursor {
     display: inline-block;
@@ -58,6 +82,7 @@
     background: #D4FF5C;
     animation: blink 1s steps(1, end) infinite;
   }
+  .small .cursor { height: 27px; vertical-align: -4px; }
   @keyframes blink { 50% { opacity: 0; } }
   .marker { font-family: 'Geist Mono', monospace; font-size: 12px; color: #8E9096; }
 </style>

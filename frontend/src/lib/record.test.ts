@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
-  chapterStatus, closingHint, closingStages, gainState, refineEta, destinationLine, isTyping, levelShare, lyrics, micPercent, progressOf, pushLevel, savedPath, segmentTime, tailText, updatedAgo,
+  chapterStatus, closingHint, joinText, mergeSegments, closingStages, gainState, refineEta, destinationLine, isTyping, levelShare, lyrics, micPercent, progressOf, pushLevel, savedPath, segmentTime, tailText, updatedAgo,
   waveBars, WAVE_BARS,
 } from "./record";
 import type { Snapshot } from "./types";
@@ -43,17 +43,61 @@ describe("waveform", () => {
 });
 
 describe("lyrics", () => {
+  // Whole sentences, so each confirmed segment is a line of its own (N3.3 merges only fragments).
+  const s = (i: number) => `Sentence number ${i}.`;
+
   it("shows four older lines and the pending text as the current line", () => {
-    const tail = [1, 2, 3, 4, 5, 6].map((i) => segment(i, `s${i}`));
+    const tail = [1, 2, 3, 4, 5, 6].map((i) => segment(i, s(i)));
     expect(lyrics({ count: 6, tail, pending: " then sum " })).toEqual(
-      { older: ["s3", "s4", "s5", "s6"], current: "then sum", live: true, marker: "L6 · 46:58", key: "6" });
+      { older: [s(3), s(4), s(5), s(6)], current: "then sum", live: true, marker: "L6 · 46:58", key: "6" });
   });
 
   it("falls back to the last confirmed segment, and to nothing before any speech", () => {
-    const tail = [1, 2, 3].map((i) => segment(i, `s${i}`, "01:02:03.00"));
-    expect(lyrics({ count: 3, tail, pending: "" })).toMatchObject({ older: ["s1", "s2"], current: "s3", live: false,
+    const tail = [1, 2, 3].map((i) => segment(i, s(i), "01:02:03.00"));
+    expect(lyrics({ count: 3, tail, pending: "" })).toMatchObject({ older: [s(1), s(2)], current: s(3), live: false,
       marker: "L3 · 1:02:03" });
     expect(lyrics({ count: 0, tail: [], pending: "" })).toMatchObject({ older: [], current: "", marker: "" });
+  });
+
+  it("merges Qwen's one- and two-character fragments into lines (plan N3.3)", () => {
+    const texts = ["如果。", "金山存在的话。", "按照。", "十。", "我们刚才讲的那个公式来算的话", "结果就是这样。"];
+    const tail = texts.map((text, i) => segment(i + 1, text));
+    expect(mergeSegments(tail)).toEqual(["如果。金山存在的话。", "按照。十。我们刚才讲的那个公式来算的话", "结果就是这样。"]);
+    expect(lyrics({ count: 6, tail, pending: "" })).toMatchObject(
+      { older: ["如果。金山存在的话。", "按照。十。我们刚才讲的那个公式来算的话"], current: "结果就是这样。", key: "6" });
+  });
+
+  it("ends a line at full- and half-width sentence ends and past 14 characters", () => {
+    expect(mergeSegments([{ text: "这是一个完整的句子吗？" }, { text: "是的！" }, { text: "好" }]))
+      .toEqual(["这是一个完整的句子吗？", "是的！好"]);
+    expect(mergeSegments([{ text: "Is that right?" }, { text: "Yes" }, { text: "it is." }]))
+      .toEqual(["Is that right?", "Yes it is."]);
+    expect(mergeSegments([{ text: "线性变换" }, { text: "保持加法" }, { text: "和数乘运算" }, { text: "所以" }]))
+      .toEqual(["线性变换保持加法和数乘运算所以"]);
+    expect(mergeSegments([{ text: "一二三四五六七八" }, { text: "九十一二三四五六七" }, { text: "后" }]))
+      .toEqual(["一二三四五六七八九十一二三四五六七", "后"]);
+    // A Whisper block without punctuation stays one line however long; confirmed lines are never cut.
+    const block = "我们今天来讲线性代数里面的特征值和特征向量".repeat(5);
+    expect(mergeSegments([{ text: block }])).toEqual([block]);
+  });
+
+  it("never joins Chinese with a space", () => {
+    expect(joinText("老师说", "这个")).toBe("老师说这个");
+    expect(joinText("eigen", "value")).toBe("eigen value");
+    expect(joinText("特征值", "lambda")).toBe("特征值lambda");
+    expect(joinText("所以。", "Then")).toBe("所以。Then");
+  });
+
+  it("cuts unconfirmed text to its last 60 characters (plan N3.3)", () => {
+    const chinese = "这是一段很长的没有确认的中文文字".repeat(6);
+    expect(tailText(chinese)).toBe("…" + chinese.slice(-60));
+    expect(tailText(chinese.slice(0, 60))).toBe(chinese.slice(0, 60));
+    const english = "the determinant of a product equals the product of the determinants of each matrix";
+    const shown = tailText(english);
+    // The cut falls inside a word, which is dropped: the rest starts at a word of the original.
+    expect(shown.startsWith("…") && shown.length <= 61).toBe(true);
+    expect(english.endsWith(shown.slice(1)) && english.includes(" " + shown.slice(1))).toBe(true);
+    expect(shown).toBe("…equals the product of the determinants of each matrix");
   });
 
   it("keeps the newest words of a long current line", () => {

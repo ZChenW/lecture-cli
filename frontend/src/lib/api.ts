@@ -1,6 +1,6 @@
 import type {
   AsrModel, Bootstrap, Check, Config, Course, Devices, KeyStatus, Missing, Note, OpenerKind, Openers, Problem, Result,
-  RunRecord, Snapshot, Task,
+  QwenLive, RunRecord, Snapshot, Task,
 } from "./types";
 
 /** Every failure, including a lost connection, arrives as one of these. */
@@ -69,6 +69,7 @@ export const api = {
   addCourse: (name: string) => send<Course>("POST", "/api/courses", { name }),
   devices: () => get<Devices>("/api/devices"),
   asrModels: () => get<AsrModel[]>("/api/asr-models"),
+  qwenLive: () => get<QwenLive>("/api/qwen-live"),
   prepare: (name: string) => send<{ task: string }>("POST", `/api/asr-models/${encodeURIComponent(name)}/prepare`),
   task: (id: string) => get<Task>(`/api/tasks/${encodeURIComponent(id)}`),
   checks: () => get<Check[]>("/api/checks"),

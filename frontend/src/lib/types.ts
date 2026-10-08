@@ -30,7 +30,7 @@ export interface Config {
   auto_gain: boolean;
   qwen_python: string | null;
   onboarded?: boolean;
-  course_settings?: Record<string, { language?: string }>;
+  course_settings?: Record<string, { language?: string; asr_model?: string }>;
   [key: string]: unknown;
 }
 
@@ -64,6 +64,8 @@ export interface Note {
   review_count?: number;
 }
 export interface AsrModel { name: string; family: "whisper" | "qwen"; cached: boolean; env_ready: boolean }
+/** Plan N3.1: GET /api/qwen-live, whether a Chinese lecture can switch to live Qwen. */
+export interface QwenLive { model: string; env_ready: boolean; cached: boolean; gpu: boolean; ready: boolean; install: string }
 export interface Device { index: number; name: string; channels: number; default: boolean }
 export interface Devices { devices: Device[]; selected: string | number | null; notes: Record<string, string> }
 export interface Task { id: string; status: "running" | "done" | "failed"; exit_code: number | null; output: string[] }
@@ -84,6 +86,8 @@ export interface Snapshot {
   asr: {
     status: string; device_label: string | null; model: string | null; level: number;
     backlog_seconds: number; queued_seconds: number; notices: Notice[]; error: string | null;
+    /** Plan N3.4: 30 s of weak input while someone talks; GUI only, never in the note. */
+    weak_input?: string | null;
   };
   transcript: { count: number; tail: { id: number; start: string; end: string; text: string }[]; pending: string };
   notes: { status: string; worker_alive: boolean | null; unprocessed_segments: number; updated: number | null; latest: string | null };

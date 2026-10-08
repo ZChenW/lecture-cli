@@ -30,6 +30,8 @@ export function bannerItems(asr: Snapshot["asr"]): Notice[] {
     if (notice.kind === "gain" && !/静音|下限/.test(notice.text)) continue;
     if (notice.text && !items.some((item) => item.text === notice.text)) items.push(notice);
   }
+  // Plan N3.4: weak input gets a banner that can be closed, besides the mic cell's warning colour.
+  if (asr.weak_input) items.push({ kind: "weak", text: asr.weak_input });
   return items;
 }
 

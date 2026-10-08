@@ -106,3 +106,13 @@ def test_cjk_majority_counts_letters_not_spaces_or_punctuation():
     assert cjk_majority("，。！ 中")
     assert not cjk_majority("Hello, world. 你")
     assert not cjk_majority("")
+
+
+def test_unconfirmed_text_joins_chinese_without_a_space():
+    # Plan N3.3: pending and buffer meet with a space only when both sides are Latin text.
+    from lecture_cli.gui.sessions import join_live
+    assert join_live("老师说这个", "定理很重要") == "老师说这个定理很重要"
+    assert join_live("the eigen", " value") == "the eigen value"
+    assert join_live("特征值", "lambda") == "特征值lambda"
+    assert join_live("所以。", "Then") == "所以。Then"
+    assert join_live("", "buffer") == "buffer" and join_live("pending ", None) == "pending"

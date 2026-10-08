@@ -36,24 +36,70 @@ export function segmentTime(stamp: string | null | undefined): string {
 
 export interface Lyrics { older: string[]; current: string; live: boolean; marker: string; key: string }
 
-/** Four older lines (oldest first) and the large current line: the pending text, else the last confirmed segment. */
+// Chinese, Japanese and Korean text and full-width punctuation; Latin text is everything else.
+const CJK = /[\u3000-\u30ff\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff\uac00-\ud7af\uff00-\uffef]/;
+const SENTENCE_END = /[。？！.?!]["'”’）)]*$/;
+export const MERGE_LIMIT = 14;
+/** A sentence end closes a line only once it holds this many letters: "如果。" alone is a fragment. */
+export const SENTENCE_MIN = 8;
+
+/** Plan N3.3: a space between two pieces of text only when neither side is CJK. */
+export function joinText(left: string, right: string): string {
+  if (!left || !right) return left || right;
+  return left + (CJK.test(left.at(-1)!) || CJK.test(right[0]) ? "" : " ") + right;
+}
+
+function letters(text: string): number {
+  return (text.match(/[\p{L}\p{N}]/gu) ?? []).length;
+}
+
+/**
+ * Plan N3.3, display only: neighbouring confirmed segments share a line until it ends a sentence
+ * (。？！ and half-width .?!) or holds more than 14 characters, so Qwen's "如果。" "金山存在的话。"
+ * read as one line. Without the minimum a sentence end would close "如果。" on its own, so a short
+ * piece ending in punctuation keeps collecting.
+ */
+export function mergeSegments(segments: { text: string }[]): string[] {
+  const lines: string[] = [];
+  let line = "";
+  for (const segment of segments) {
+    line = joinText(line, segment.text.trim());
+    if (line.length > MERGE_LIMIT || (SENTENCE_END.test(line) && letters(line) >= SENTENCE_MIN)) {
+      lines.push(line);
+      line = "";
+    }
+  }
+  if (line) lines.push(line);
+  return lines;
+}
+
+/** Four older lines (oldest first) and the large current line: the pending text, else the last confirmed line. */
 export function lyrics(transcript: Snapshot["transcript"]): Lyrics {
   const tail = transcript.tail.filter((segment) => segment.text);
   const live = transcript.pending.trim() !== "";
-  const confirmed = live ? tail : tail.slice(0, -1);
+  const lines = mergeSegments(tail);
+  const confirmed = live ? lines : lines.slice(0, -1);
   const last = tail.at(-1);
   return {
-    older: confirmed.slice(-4).map((segment) => segment.text),
-    current: live ? transcript.pending.trim() : last?.text ?? "",
+    older: confirmed.slice(-4),
+    current: live ? transcript.pending.trim() : lines.at(-1) ?? "",
     live,
     marker: last ? `L${last.id} · ${segmentTime(last.start)}` : "",
     key: String(last?.id ?? 0),
   };
 }
 
-/** Long pending text keeps its newest words in view. */
-export function tailText(text: string, limit = 140): string {
-  return text.length > limit ? "…" + text.slice(-limit).replace(/^\S*\s/, "") : text;
+export const PENDING_LIMIT = 60;
+
+/**
+ * Plan N3.3: unconfirmed text over 60 characters shows its last 60 after an ellipsis. Latin text cut
+ * inside a word drops that partial word; Chinese has no spaces, so it is cut exactly.
+ */
+export function tailText(text: string, limit = PENDING_LIMIT): string {
+  if (text.length <= limit) return text;
+  const tail = text.slice(-limit);
+  const midWord = /\w$/.test(text.slice(0, -limit)) && /^\w/.test(tail) && /\s/.test(tail);
+  return "…" + (midWord ? tail.replace(/^\S*\s+/, "") : tail);
 }
 
 export function updatedAgo(updated: number | null, now: number): string {

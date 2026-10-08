@@ -5,6 +5,7 @@ from collections import deque
 from datetime import datetime
 import json
 import os
+import re
 from pathlib import Path
 import sqlite3
 import subprocess
@@ -186,6 +187,19 @@ def input_label(meta: dict) -> str:
     return "系统默认" if device in (None, "") else str(device)
 
 
+# Chinese, Japanese and Korean text and their full-width punctuation: never joined with a space.
+CJK = re.compile(r"[\u3000-\u30ff\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff\uac00-\ud7af\uff00-\uffef]")
+
+
+def join_live(pending, buffer) -> str:
+    """Plan N3.3: a space between pending and buffer only when both sides are Latin text, so the
+    unconfirmed Chinese line never reads "老师 说"."""
+    pending, buffer = (pending or "").strip(), (buffer or "").strip()
+    if not pending or not buffer:
+        return pending or buffer
+    return pending + ("" if CJK.match(pending[-1]) or CJK.match(buffer[0]) else " ") + buffer
+
+
 def snapshot(directory: Path, cache: SnapshotCache | None = None) -> dict:
     """The only session shape the frontend depends on; field meanings follow cli.display()."""
     cache = cache or SnapshotCache()
@@ -240,7 +254,7 @@ def snapshot(directory: Path, cache: SnapshotCache | None = None) -> dict:
         "transcript": {
             "count": cache.transcript.count,
             "tail": list(cache.transcript.tail),
-            "pending": " ".join(filter(None, [asr.get("pending"), asr.get("buffer")])),
+            "pending": join_live(asr.get("pending"), asr.get("buffer")),
         },
         "notes": {
             "status": notes.get("status") or "等待新增转录",
