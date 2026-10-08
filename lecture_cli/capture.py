@@ -4,6 +4,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import re
 import signal
 import time
 from pathlib import Path
@@ -17,6 +18,21 @@ from .mic_gain import mic_gain
 def timestamp(seconds: float) -> str:
     seconds = round(seconds, 2)  # 59.997 must carry into the minute, not print as 60.00
     return f"{int(seconds) // 3600:02}:{int(seconds) // 60 % 60:02}:{seconds % 60:05.2f}"
+
+
+# Chinese, Japanese and Korean script (kana, CJK ideographs, Hangul).
+CJK = re.compile(r"[\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff\uac00-\ud7af]")
+SENTENCE_ENDS = (".", "?", "!", "。", "？", "！")
+LIMIT = 240
+CJK_LIMIT = 120
+PAUSE_SECONDS = 0.6
+PAUSE_MIN_CHARS = 12
+
+
+def cjk_majority(text: str) -> bool:
+    """More CJK characters than other letters and digits; spaces and punctuation do not count."""
+    cjk = len(CJK.findall(text))
+    return cjk > sum(1 for c in text if c.isalnum()) - cjk
 
 
 class Transcript:
@@ -51,9 +67,26 @@ class Transcript:
                 if key in self.seen:
                     continue
                 self.seen.add(key)
-                self.pending.append(token)
-                if token.text.rstrip().endswith((".", "?", "!", "。", "？", "！")) or len(self.pending_text) >= 240:
+                if self.paused_before(token):
                     self.flush()
+                self.pending.append(token)
+                text = self.pending_text
+                limit = CJK_LIMIT if cjk_majority(text) else LIMIT
+                if token.text.rstrip().endswith(SENTENCE_ENDS) or len(text) >= limit:
+                    self.flush()
+
+    def paused_before(self, token) -> bool:
+        """Whisper's Chinese output often has no punctuation at all: a spoken pause ends the segment
+        instead, once there is enough text to stand alone. Latin-script text keeps the old rules."""
+        if not self.pending:
+            return False
+        text = self.pending_text
+        try:
+            gap = token.start - self.pending[-1].end
+        except TypeError:
+            return False
+        # Timestamps are floats: 0.6 s computed as 7.85 - 7.25 must still count as 0.6 s.
+        return gap >= PAUSE_SECONDS - 1e-6 and len(text.strip()) >= PAUSE_MIN_CHARS and cjk_majority(text)
 
     @property
     def pending_text(self) -> str:
