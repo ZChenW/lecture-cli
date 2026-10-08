@@ -34,6 +34,7 @@ from .providers import notes_label
 from . import runs
 from . import config as settings
 from .input_level import summary as weak_input_summary
+from .mic_gain import restore_volume, start_volume
 
 console = Console()
 
@@ -120,6 +121,9 @@ def reap_stale_sessions() -> None:
                     time.sleep(0.05)
                 if any(still_running(pid) for pid in meta.get("children", [])):
                     continue
+                # Plan N3.5: the controller died before it could put the volume back.
+                if notice := restore_volume(meta.get("mic_volume_start"), read_json(directory / "asr-state.json").get("gain_volume")):
+                    console.print("上次录制的麦克风音量：" + notice, markup=False)
                 if discard_requested(directory):
                     # The controller died while discarding: finish the discard, never recover.
                     failed = discard_outputs(Path(meta["output"]))
@@ -412,6 +416,8 @@ def session(args, config: dict, course: Path) -> int:
                                 start_new_session=True, env=env)
 
     try:
+        # Plan N3.5: remember the volume auto-gain may change, to put it back when the run ends.
+        meta["mic_volume_start"] = start_volume(meta)
         write_json(directory / "session.json", meta)
         publish("starting")
         try:
@@ -536,6 +542,9 @@ def session(args, config: dict, course: Path) -> int:
                 except subprocess.TimeoutExpired:
                     process.kill()
                     process.wait()
+        # Normal end and discard alike; capture has stopped, so nothing changes the volume any more.
+        if notice := restore_volume(meta.get("mic_volume_start"), read_json(directory / "asr-state.json").get("gain_volume")):
+            console.print("麦克风音量：" + notice, markup=False)
         try:
             if (directory / "session.json").exists() and not discarded:
                 publish("saving")

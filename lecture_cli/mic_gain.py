@@ -15,6 +15,8 @@ CLIP_RATIO = 0.001
 GAIN_STEP = 10 ** (-12 / 60)  # PipeWire volume v represents linear gain v³.
 MIN_VOLUME = 0.10
 MUTED_NOTICE = "默认麦克风已静音；请手动取消静音，自动调节不会取消静音。"
+# wpctl get-volume prints two decimals, so a value set as 0.536313 reads back as 0.54.
+SAME_VOLUME = 0.006
 
 
 @dataclass(frozen=True)
@@ -73,6 +75,7 @@ class MicGain:
         self.paused = False
         self.skip_next = False
         self.active = False
+        self.adjusted = None  # The last volume this run set, so the controller can put the start value back.
         self.notice = device_notice(device)
         if self.notice:
             return
@@ -114,7 +117,7 @@ class MicGain:
             decision = decide_gain(self.volume, clipped, total, muted=muted)
             if decision.volume is not None:
                 run_wpctl(["set-volume", SOURCE, f"{decision.volume:.6f}"], self.runner)
-                self.volume = decision.volume
+                self.volume = self.adjusted = decision.volume
                 self.skip_next = decision.skip_next
                 # Start the settling window after wpctl returns.
                 with self.lock:
@@ -133,3 +136,38 @@ def mic_gain(meta, runner=None) -> MicGain | None:
     if meta.get("audio_file") or meta.get("demo") or not meta.get("auto_gain", True):
         return None
     return MicGain(meta.get("device"), runner)
+
+
+def gain_applies(meta) -> bool:
+    return not (meta.get("audio_file") or meta.get("demo") or not meta.get("auto_gain", True)
+                or device_notice(meta.get("device")))
+
+
+def start_volume(meta, runner=None) -> float | None:
+    """The default source volume before recording, when this run may adjust it; None if unknown."""
+    if not gain_applies(meta):
+        return None
+    try:
+        return read_volume(runner)[0]
+    except VolumeError:
+        return None
+
+
+def restore_volume(start, adjusted, runner=None) -> str:
+    """Plan N3.5: put back the start volume after auto-gain changed it, unless the user changed it since.
+
+    start is from session.json, adjusted is the last value auto-gain set (asr-state.json). Without an
+    adjustment nothing is read or written. Returns a notice for the console, or "".
+    """
+    def number(value):
+        return isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value)
+    if not number(start) or not number(adjusted):
+        return ""
+    try:
+        current, _ = read_volume(runner)
+        if abs(current - adjusted) > SAME_VOLUME:
+            return f"录制中手动调整过音量（现为 {current:.0%}），保持不变，未恢复为开始时的 {start:.0%}。"
+        run_wpctl(["set-volume", SOURCE, f"{start:.6f}"], runner or subprocess.run)
+    except VolumeError:
+        return f"未能恢复为开始时的 {start:.0%}（wpctl 不可用），请在系统声音设置中调回。"
+    return f"已恢复为开始时的 {start:.0%}。"

@@ -130,6 +130,8 @@ async def record(directory: Path) -> None:
         if force or time.monotonic() - last_write > 0.15:
             if gain:
                 state["gain_notice"] = gain.notice
+                if gain.adjusted is not None:
+                    state["gain_volume"] = gain.adjusted  # Plan N3.5: restored after the run when unchanged.
             if not meta.get("audio_file"):
                 state.update(audio.snapshot())
             if state.get("input_overflows"):

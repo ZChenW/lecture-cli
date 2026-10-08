@@ -150,6 +150,8 @@ async def record(directory: Path, transport=None):
                 return
             if gain:
                 state["gain_notice"] = gain.notice
+                if gain.adjusted is not None:
+                    state["gain_volume"] = gain.adjusted  # Plan N3.5: restored after the run when unchanged.
             state.update(audio.snapshot(), lag=max(0, extracted - state["seconds"]),
                          last=transcript.last, count=transcript.count)
             write_json(state_path, state)

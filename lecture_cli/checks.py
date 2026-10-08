@@ -40,6 +40,9 @@ def weights_cached(model: str) -> bool:
         return False
 
 
+LOW_VOLUME = 0.40
+
+
 def mic_volume(runner) -> Check:
     from .mic_gain import VolumeError, read_volume
     try:
@@ -47,7 +50,12 @@ def mic_volume(runner) -> Check:
     except VolumeError as exc:
         # Recording works without automatic gain, so this never fails the whole check.
         return Check("mic_volume", "默认源麦克风音量", "warn", str(exc))
-    return Check("mic_volume", "默认源麦克风音量", "ok", f"{volume:.0%}" + ("（已静音）" if muted else ""))
+    detail = f"{volume:.0%}" + ("（已静音）" if muted else "")
+    if volume < LOW_VOLUME:
+        # Plan N3.5: weak input makes recognition worse, and auto-gain never raises the volume.
+        return Check("mic_volume", "默认源麦克风音量", "warn", detail,
+                     "上课时声音可能过弱：音量低于 40%，请在系统声音设置中调高输入音量")
+    return Check("mic_volume", "默认源麦克风音量", "ok", detail)
 
 
 def asr_device(config, runner) -> Check:
