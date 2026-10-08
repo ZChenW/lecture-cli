@@ -9,7 +9,7 @@ import pytest
 
 from lecture_cli import api_capture, capture
 from lecture_cli.gui import sessions
-from lecture_cli.input_level import NOTICE, WeakInput, summary
+from lecture_cli.input_level import NO_SIGNAL, NO_SPEECH, NOTICE, WeakInput, summary
 from lecture_cli.storage import read_json, write_json
 
 
@@ -43,20 +43,22 @@ def test_thirty_seconds_of_weak_speech_raise_the_notice_and_recovery_clears_it()
     assert changes == [(10, "")]
 
 
-def test_complete_silence_without_text_never_warns():
+def test_complete_silence_without_text_never_raises_the_weak_input_notice():
+    # Only the start-of-recording notice (plan GUI-3 item 5) speaks about silence; see below.
     level = WeakInput()
-    assert feed(level, 120, None) == (0, [])
-    assert feed(level, 120, -60) == (0, [])
-    assert level.notice == ""
+    assert feed(level, 120, None) == (0, [(30, NO_SIGNAL)])
+    level = WeakInput()
+    assert feed(level, 120, -60) == (0, [(30, NO_SPEECH)])
+    assert level.weak == "" and level.seconds == 0
 
 
 def test_text_confirmed_later_in_the_same_weak_stretch_still_counts():
     # Confirmed text lags the audio: the first segment arrives at 38 s, inside the weak stretch.
     level = WeakInput()
     feed(level, 35, -55)
-    assert level.notice == ""
+    assert level.weak == "" and level.notice == NO_SPEECH
     level.add(tone(3, -55), 1)
-    assert level.notice == ""  # The fourth window closes at 40 s.
+    assert level.notice == ""  # The text clears the start notice; the fourth window closes at 40 s.
     level.add(tone(2, -55), 1)
     assert level.notice == NOTICE
 
@@ -175,3 +177,98 @@ def test_local_backend_sets_the_field_from_the_audio_it_feeds(tmp_path, monkeypa
     assert state["status"] == "转录完成"
     assert state["weak_input"] == NOTICE
     assert "warning" not in state
+
+
+# --- Plan GUI-3 item 5: nothing heard at the start of the recording -------------------------------
+
+def test_thirty_seconds_with_signal_but_no_text_say_nothing_was_heard():
+    level = WeakInput()
+    assert feed(level, 29, -45) == (0, [])
+    assert feed(level, 1, -45) == (0, [(1, NO_SPEECH)])
+    assert feed(level, 120, -45) == (0, []) and level.notice == NO_SPEECH
+    assert level.seconds == 0  # Never counted as weak time, so never reaches the note.
+
+
+def test_first_text_clears_it_for_good():
+    level = WeakInput()
+    feed(level, 30, -30)
+    assert level.add(tone(1, -30), 1) is True and level.notice == ""
+    # Another silent stretch later in the lecture does not bring it back.
+    assert feed(level, 90, None, start_count=1) == (1, []) and level.notice == ""
+
+
+def test_paused_time_is_not_part_of_the_thirty_seconds():
+    level = WeakInput()
+    feed(level, 20, -45)
+    level.pause()  # Nothing is fed while paused, however long the break.
+    assert feed(level, 9, -45) == (0, [])
+    assert feed(level, 1, -45) == (0, [(1, NO_SPEECH)])
+
+
+def test_almost_no_signal_asks_to_check_the_microphone():
+    for dbfs, expected in ((None, NO_SIGNAL), (-75, NO_SIGNAL), (-69, NO_SPEECH)):
+        level = WeakInput()
+        feed(level, 30, dbfs)
+        assert level.notice == expected, dbfs
+    # The level is the RMS of the whole 30 s: a loud moment lifts a silent half minute.
+    level = WeakInput()
+    level.add(tone(29, None), 0)
+    level.add(tone(1, -40), 0)
+    assert level.notice == NO_SPEECH
+
+
+def test_text_arriving_at_once_never_triggers_it():
+    level = WeakInput()
+    count, changes = feed(level, 300, -30, texts_every=1)
+    assert changes == [] and level.notice == ""
+    # Quiet speech with text from the start: only the weak-input rule may speak, never the start one.
+    level = WeakInput()
+    _, changes = feed(level, 300, None, texts_every=1)
+    assert {text for _, text in changes} <= {NOTICE, ""} and level.start == ""
+
+
+def test_snapshot_carries_the_start_notice_in_the_same_field(tmp_path):
+    write_json(tmp_path / "session.json", {"course": "MATH421"})
+    write_json(tmp_path / "asr-state.json", {"weak_input": NO_SPEECH})
+    asr = sessions.snapshot(tmp_path)["asr"]
+    assert asr["weak_input"] == NO_SPEECH and asr["notices"] == []
+
+
+def test_local_backend_raises_it_when_recognition_confirms_nothing(tmp_path, monkeypatch):
+    path = wav(tmp_path, tone(32, -50))
+    write_json(tmp_path / "session.json", dict(asr_model="base", language="zh", fast=True, audio_file=str(path)))
+    fronts = asyncio.Queue()
+
+    class Processor:
+        def __init__(self, **kwargs):
+            pass
+        async def create_tasks(self):
+            async def results():
+                while (front := await fronts.get()) is not None:
+                    yield front
+            return results()
+        async def process_audio(self, pcm):
+            if not pcm:
+                await fronts.put(None)
+        async def cleanup(self): pass
+
+    monkeypatch.setitem(sys.modules, "whisperlivekit", SimpleNamespace(AudioProcessor=Processor))
+    monkeypatch.setattr(capture, "build_engine", lambda meta: (None, "cpu", ""))
+    asyncio.run(asyncio.wait_for(capture.record(tmp_path), 20))
+    state = read_json(tmp_path / "asr-state.json")
+    assert state["weak_input"] == NO_SPEECH and state["weak_input_seconds"] == 0
+    assert "warning" not in state
+
+
+def test_cloud_backend_raises_it_when_the_service_returns_no_text(tmp_path, monkeypatch):
+    monkeypatch.setenv("LECTURE_ASR_API_KEY", "fake-asr-key")
+    path = wav(tmp_path, tone(41, None))
+    write_json(tmp_path / "session.json", dict(asr_backend="api", asr_api_base="https://example.invalid/v1",
+               asr_api_model="test", language="zh", fast=True, audio_file=str(path)))
+    def handle(request):
+        if request.method == "GET":
+            return httpx.Response(200, json={"data": []})
+        return httpx.Response(200, json={"segments": []})
+    assert api_capture.run(tmp_path, transport=httpx.MockTransport(handle)) == 0
+    state = read_json(tmp_path / "asr-state.json")
+    assert state["weak_input"] == NO_SIGNAL and state["weak_input_seconds"] == 0
