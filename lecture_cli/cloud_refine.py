@@ -29,6 +29,15 @@ RETRY_FAILED = "转录服务多次重试仍不可用"
 # Same threshold as api_capture and refinement: these segments are never uploaded.
 NEAR_SILENT = 32
 CJK = r"[\u3000-\u303f\u3400-\u9fff\uf900-\ufaff\uff00-\uffef]"
+FULL_WIDTH = str.maketrans(",.?!:;", "，。？！：；")
+# Plan GUI-3 item 7: a half-width mark with Chinese on at least one side; never a run of dots.
+HALF_WIDTH = re.compile(rf"(?:(?<={CJK})|(?=[,.?!:;]{CJK}))(?:[,?!:;]|(?<!\.)\.(?!\.)) *")
+
+
+def full_width(text: str) -> str:
+    """Chinese punctuation where Whisper wrote ASCII marks next to Chinese; English and numbers
+    (3.14, e.g., 10:30) are left alone. A space after a converted mark goes with it."""
+    return HALF_WIDTH.sub(lambda m: m[0].strip().translate(FULL_WIDTH), text)
 
 
 def context(meta: dict) -> str:
@@ -110,4 +119,4 @@ class CloudRefiner:
         result = await transcribe(self.client, self.meta, pcm, self.previous, {}, lambda: None, sleep=sleep)
         texts = Texts()
         consume_response(texts, result, 0, len(pcm) / BYTES_PER_SECOND)
-        return texts.text()
+        return full_width(texts.text()) if self.meta.get("language") == "zh" else texts.text()

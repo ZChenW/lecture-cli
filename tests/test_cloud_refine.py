@@ -507,3 +507,35 @@ def test_real_controller_refines_through_a_local_fake_service(tmp_path, status, 
     for path in note_path.parent.rglob("*"):
         if path.is_file():
             assert KEY.encode() not in path.read_bytes()
+
+
+# --- Plan GUI-3 item 7: Chinese punctuation for Chinese refinement --------------------------------
+
+@pytest.mark.parametrize("text, expected", [
+    ("我们定义核,然后看例子.", "我们定义核，然后看例子。"),
+    ("第3章:向量空间;下一节!对吗?", "第3章：向量空间；下一节！对吗？"),
+    ("π约等于3.14,对吧?", "π约等于3.14，对吧？"),
+    ("中文, English words.", "中文，English words."),  # The space after a converted mark goes with it.
+    ("e.g. this, that: 10:30.", "e.g. this, that: 10:30."),  # No Chinese neighbour: untouched.
+    ("He said: 中文 . 好", "He said: 中文 . 好"),  # A space is not Chinese either.
+    ("好的...我们继续", "好的...我们继续"),  # A run of dots is not a full stop.
+    ("版本v1.2发布", "版本v1.2发布"),
+    ("（括号）.", "（括号）。"),  # Full-width forms count as Chinese neighbours.
+])
+def test_full_width_only_beside_chinese(text, expected):
+    assert cloud_refine.full_width(text) == expected
+
+
+def test_chinese_refinement_gets_full_width_punctuation_and_others_do_not(tmp_path):
+    session(tmp_path)
+    archive(tmp_path, voiced(5))
+    assert run(tmp_path, Service([{"text": "特征值,特征向量. e.g. 3.14"}])) == 0
+    records = [json.loads(line) for line in (tmp_path / "refined.jsonl").read_text().splitlines()]
+    assert [r["text"] for r in records] == ["特征值，特征向量。e.g. 3.14"]
+    english = tmp_path / "en"
+    english.mkdir()
+    session(english, language="en")
+    archive(english, voiced(5))
+    assert run(english, Service([{"text": "特征值,特征向量."}])) == 0
+    records = [json.loads(line) for line in (english / "refined.jsonl").read_text().splitlines()]
+    assert [r["text"] for r in records] == ["特征值,特征向量."]
