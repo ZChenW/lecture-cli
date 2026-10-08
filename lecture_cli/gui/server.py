@@ -37,7 +37,7 @@ STATIC = Path(__file__).parent / "static"
 KINDS = ("notes", "asr")
 SSE_INTERVAL = 0.25
 KEEPALIVE_SECONDS = 15
-OVERRIDES = {"language", "interval", "refine", "auto_gain", "context_path", "demo"}
+OVERRIDES = {"language", "interval", "refine", "auto_gain", "context_path", "demo", "asr_model"}
 SENTINELS = {"pause": ("pause", True), "resume": ("pause", False), "stop": ("stop", True),
              "skip-refine": ("skip-refine", True), "discard": ("discard", True)}
 OPEN_MODES = ("reveal", "terminal", "editor")
@@ -192,6 +192,11 @@ def version() -> str:
         return "unknown"
 
 
+def known_asr_models() -> tuple[str, ...]:
+    from ..asr import asr_models
+    return asr_models()
+
+
 def check_overrides(overrides, root: Path) -> tuple[dict, Path | None]:
     if not isinstance(overrides, dict):
         raise ApiError(422, "invalid_overrides", "overrides 必须是对象", "overrides")
@@ -200,7 +205,8 @@ def check_overrides(overrides, root: Path) -> tuple[dict, Path | None]:
             raise ApiError(422, "invalid_overrides", f"不允许覆盖 {key}", key)
         valid = {"language": isinstance(value, str) and value.strip() != "",
                  "interval": isinstance(value, (int, float)) and not isinstance(value, bool) and 1 <= value <= 3600,
-                 "context_path": isinstance(value, str) and value != ""}.get(key, isinstance(value, bool))
+                 "context_path": isinstance(value, str) and value != "",
+                 "asr_model": isinstance(value, str) and value in known_asr_models()}.get(key, isinstance(value, bool))
         if not valid:
             raise ApiError(422, "invalid_overrides", f"{key} 的取值无效", key)
     context = None
@@ -355,6 +361,10 @@ def create_app(port: int, token: str, *, on_quit=None, sessions: Sessions | None
                      "cached": checks.weights_cached(name), "env_ready": ready(name)} for name in names()]
         return JSONResponse(await run_in_threadpool(describe))
 
+    async def qwen_live(request):
+        from . import qwen_live as live
+        return JSONResponse(await run_in_threadpool(live.readiness, settings.load()))
+
     async def prepare(request):
         from ..asr import asr_models as names
         name = request.path_params["name"]
@@ -390,6 +400,12 @@ def create_app(port: int, token: str, *, on_quit=None, sessions: Sessions | None
                 settings.remember_course_language(course.name, overrides["language"].strip())
             except OSError:
                 pass  # The lecture is already running; only the remembered choice is lost.
+        if "asr_model" in overrides and not overrides.get("demo"):
+            try:
+                # Plan N3.1: the Qwen switch, on or off, is this course's choice from now on.
+                settings.remember_course_asr_model(course.name, overrides["asr_model"])
+            except OSError:
+                pass
         return JSONResponse(await run_in_threadpool(sessions.snapshot, active), status_code=201)
 
     async def get_active(request):
@@ -528,6 +544,7 @@ def create_app(port: int, token: str, *, on_quit=None, sessions: Sessions | None
         Route("/api/courses", add_course, methods=["POST"]),
         Route("/api/devices", devices),
         Route("/api/asr-models", asr_models),
+        Route("/api/qwen-live", qwen_live),
         Route("/api/asr-models/{name}/prepare", prepare, methods=["POST"]),
         Route("/api/tasks/{id}", task),
         Route("/api/checks", run_checks),

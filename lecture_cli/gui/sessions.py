@@ -320,6 +320,8 @@ def command(course: str, overrides: dict, context: Path | None) -> list[str]:
             args.append("--refine" if overrides["refine"] else "--no-refine")
         if "auto_gain" in overrides:
             args.append("--auto-gain" if overrides["auto_gain"] else "--no-auto-gain")
+        if "asr_model" in overrides:
+            args.append(f"--asr-model={overrides['asr_model']}")
     # "--" keeps a course name such as "-x" from being read as an option.
     return args + ["--", course]
 

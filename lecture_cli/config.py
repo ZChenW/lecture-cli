@@ -148,33 +148,52 @@ def validate(config: dict) -> list[Problem]:
     from .openers import problems as opener_problems
     problems += [Problem(field, message) for field, message in opener_problems(config)]
     if not course_settings_valid(config.get("course_settings")):
-        problems.append(Problem("course_settings", "course_settings 必须形如 {\"课程名\": {\"language\": \"zh\"}}"))
+        problems.append(Problem("course_settings", "course_settings 必须形如 {\"课程名\": {\"language\": \"zh\", \"asr_model\": \"qwen3-asr-1.7b\"}}"))
     if not isinstance(config.get("onboarded"), bool):
         problems.append(Problem("onboarded", "onboarded 必须是 true 或 false"))
     return problems
 
 
+COURSE_SETTINGS = ("language", "asr_model")  # asr_model: plan N3.1, the live model chosen for this course
+
+
 def course_settings_valid(value) -> bool:
     return isinstance(value, dict) and all(
         isinstance(name, str) and isinstance(entry, dict) and all(
-            key == "language" and isinstance(language, str) and language.strip() for key, language in entry.items())
+            key in COURSE_SETTINGS and isinstance(setting, str) and setting.strip() for key, setting in entry.items())
         for name, entry in value.items())
 
 
-def course_language(config: dict, course: str) -> str | None:
-    """The language remembered for this course, if any; unknown courses simply have none."""
+def course_setting(config: dict, course: str, key: str) -> str | None:
+    """A setting remembered for this course, if any; unknown courses simply have none."""
     entry = config.get("course_settings")
     entry = entry.get(course) if isinstance(entry, dict) else None
-    language = entry.get("language") if isinstance(entry, dict) else None
-    return language if isinstance(language, str) and language.strip() else None
+    value = entry.get(key) if isinstance(entry, dict) else None
+    return value if isinstance(value, str) and value.strip() else None
 
 
-def remember_course_language(course: str, language: str) -> None:
+def course_language(config: dict, course: str) -> str | None:
+    return course_setting(config, course, "language")
+
+
+def course_asr_model(config: dict, course: str) -> str | None:
+    return course_setting(config, course, "asr_model")
+
+
+def remember_course_setting(course: str, key: str, value: str) -> None:
     current = load()
     remembered = current.get("course_settings")
     remembered = dict(remembered) if course_settings_valid(remembered) else {}
-    remembered[course] = {**remembered.get(course, {}), "language": language}
+    remembered[course] = {**remembered.get(course, {}), key: value}
     save({**current, "course_settings": remembered})
+
+
+def remember_course_language(course: str, language: str) -> None:
+    remember_course_setting(course, "language", language)
+
+
+def remember_course_asr_model(course: str, model: str) -> None:
+    remember_course_setting(course, "asr_model", model)
 
 
 def missing(config: dict, keys: dict) -> list[str]:

@@ -648,6 +648,26 @@ def setup(config):
     console.print("配置已保存。运行 lecture start 选择课程并开始。")
 
 
+def live_model_line(args, config: dict, course: str) -> str:
+    """Apply the course's remembered live model when no --asr-model was given; say where it came from."""
+    if config["asr_backend"] == "api":
+        source = "命令行 --asr-api-model 指定" if args.asr_api_model is not None else "默认设置"
+        return f"本次实时转录：云端 {config['asr_api_model']}（{source}）"
+    if args.asr_model is not None:
+        return f"本次实时转录模型：{config['asr_model']}（命令行 --asr-model 指定）"
+    remembered = settings.course_asr_model(config, course)
+    if remembered:
+        try:
+            model = resolve_asr_model(remembered)
+            capture_python(model, config.get("qwen_python"))
+        except ValueError as exc:
+            # The lecture still starts: an uninstalled Qwen must not cost a class.
+            return f"本次实时转录模型：{config['asr_model']}（默认设置；课程 {course} 记住的 {remembered} 不可用：{exc}）"
+        config["asr_model"] = model
+        return f"本次实时转录模型：{model}（课程 {course} 记住的选择）"
+    return f"本次实时转录模型：{config['asr_model']}（默认设置）"
+
+
 def choose_asr_model(current: str) -> str:
     """Interactive ↑↓ picker. Weakest models first. Saves nothing by itself."""
     if not sys.stdin.isatty() or not sys.stdout.isatty():
@@ -929,6 +949,9 @@ def main(argv=None):
             # --language wins, then the language remembered for this course, then the global default.
             if args.command == "start" and args.language is None:
                 config["language"] = settings.course_language(config, course.name) or config["language"]
+            if args.command == "start":
+                # Plan N3.1: --asr-model wins, then the live model remembered for this course, then the default.
+                console.print(live_model_line(args, config, course.name), markup=False, soft_wrap=True)
             if args.command == "start" and config["asr_backend"] == "local" and \
                     config["asr_model"] in QWEN_MODELS and config["language"] == "auto":
                 raise ValueError("Qwen 流式识别需要 --language en 或 zh")

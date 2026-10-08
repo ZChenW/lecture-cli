@@ -288,9 +288,13 @@ lecture diagnose-asr MATH421 --audio-file /path/to/sample.wav --seconds 60
 | `file_manager` | str 或 null | `null` | 图形界面“在文件夹中显示”的回退文件管理器：`nautilus`、`dolphin`、`thunar`、`nemo`、`caja`、`pcmanfm`；`null` 为按此顺序第一个已安装的 |
 | `terminal` | str 或 null | `null` | “在终端打开”所用终端：`kitty`、`ghostty`、`alacritty`、`foot`、`wezterm`、`gnome-terminal`、`konsole`、`xfce4-terminal`；`null` 同上 |
 | `editor` | str 或 null | `null` | “用编辑器打开”所用编辑器：`code`、`codium`、`zed`、`obsidian`、`gnome-text-editor`、`kate`、`gedit`、`mousepad`；`null` 同上 |
-| `course_settings` | object | `{}` | 每门课记住的设置，目前只有语言：`{"MATH421": {"language": "zh"}}` |
+| `course_settings` | object | `{}` | 每门课记住的设置：语言和本地实时转录模型，如 `{"CHIN101": {"language": "zh", "asr_model": "qwen3-asr-1.7b"}}` |
 
 `lecture start` 的课堂语言依次取：命令行 `--language`、该课程在 `course_settings` 里记住的语言、全局 `language`。从图形界面开始上课时，所选语言会写回该课程。课程名不在 `course_settings` 里时直接用全局值。
+
+本地实时转录模型同理，依次取：命令行 `--asr-model`、该课程记住的 `asr_model`、全局 `asr_model`。开始时控制台打印一行，说明本次用的模型及来源（命令行指定、课程记住的选择或默认设置）。课程记住的模型不可用（例如 Qwen 环境未安装）时不中断上课，改用全局模型并在这一行说明原因。使用云端转录（`asr_backend` 为 `api`）时不看课程记住的本地模型。
+
+从图形界面开始中文课、且全局实时模型是 Whisper 时，“开始上课”对话框会建议“中文课堂用 Qwen 实时转录更准，标点和分段也更好”。Qwen 环境、权重和 NVIDIA GPU 都就绪时显示开关“这堂课改用 Qwen”，默认打开（该课程记住过选择时按记住的来）；未就绪时只显示建议和安装命令 `./install.sh --with-qwen`。开关的选择（打开记为 Qwen 模型，关闭记为当时的全局 Whisper 模型）会写回该课程。
 
 **在其他程序中打开**：图形界面只提供三种打开方式，“在文件夹中显示”（先通过 D-Bus 的 `org.freedesktop.FileManager1.ShowItems` 让桌面文件管理器选中该文件，失败时由 `file_manager` 打开所在文件夹）、“在终端打开”（`terminal`，工作目录为所在文件夹）和“用编辑器打开”（`editor`）。程序只能从上表的固定名单中选；界面和接口都不接受任意命令，也不经过 shell。名单外的程序只能手工在 `config.json` 中写 `file_manager_command`、`terminal_command` 或 `editor_command`，值为参数数组，每项一个参数，`{path}` 换成文件的完整路径、`{dir}` 换成所在文件夹；两者都没写时把目标追加在末尾。写了 `*_command` 时它优先于同名选项。例如：
 
