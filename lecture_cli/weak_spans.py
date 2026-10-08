@@ -19,6 +19,8 @@ the same clock: recorded audio without pauses.
   in them (live or refined). Those are written to weak-spans.json.
 - Every final segment (refined when complete, else live) that overlaps a span gets PREFIX; see
   storage.final_events. Transcript files are never changed.
+- The review file lists each span as ONE point (review_item): the time range as its title, the
+  marked segments cited after it, and the full text of both versions inside it.
 - Stretches of GAP_SECONDS or more with no content segment in either version are listed as a
   processing hint only; they are not points to check.
 """
@@ -27,6 +29,7 @@ from __future__ import annotations
 import json
 import math
 from pathlib import Path
+from urllib.parse import quote
 
 from .input_level import WEAK_DBFS
 from .storage import TEXT_MARKER, events, has_content, read_json, refined_events, write_json
@@ -200,32 +203,70 @@ def mark(records: list[dict], spans: list[dict]) -> list[dict]:
     marked = []
     for record in records:
         span = interval(record)
-        if span and MARK not in record.get("text", "") and any(overlaps(span, (s["start"], s["end"])) for s in spans):
+        if span and not str(record.get("text", "")).startswith(PREFIX) and any(overlaps(span, (s["start"], s["end"])) for s in spans):
             record = {**record, "text": PREFIX + record["text"]}
         marked.append(record)
     return marked
 
 
-def live_text(live, record) -> str:
-    """The live version over the time range of a refined segment."""
-    span = interval(record)
-    if span is None:
-        return ""
-    return " ".join(r["text"].strip() for r in live or []
-                    if (s := interval(r)) and overlaps(s, span) and isinstance(r.get("text"), str) and r["text"].strip())
-
-
-def review_line(record: dict, version: str, live) -> str:
-    """One point to check for a marked segment: both versions when the refined one is used."""
-    text = record["text"].replace(PREFIX, "", 1).replace("\n", " ").strip()
-    if version == "refined":
-        other = live_text(live, record).replace("\n", " ")
-        if not other:
-            versions = f"校正版本：{text}"
-        elif other == text:
-            versions = f"校正版本与实时版本相同：{text}"
+def id_runs(ids: list[int]) -> list[tuple[int, int]]:
+    runs: list[list[int]] = []
+    for i in sorted(set(ids)):
+        if runs and i == runs[-1][1] + 1:
+            runs[-1][1] = i
         else:
-            versions = f"校正版本：{text}／实时版本：{other}"
+            runs.append([i, i])
+    return [(a, b) for a, b in runs]
+
+
+def run_label(first: int, last: int) -> str:
+    return f"L{first}–L{last}" if last > first else f"L{first}"
+
+
+def ids_text(ids: list[int]) -> str:
+    """[L3–L5] [L8]: one bare citation per run of consecutive ids (storage.linked_sources links them)."""
+    return " ".join(f"[{run_label(a, b)}]" for a, b in id_runs(ids))
+
+
+def joined(records) -> str:
+    return " ".join(r["text"].replace(PREFIX, "", 1).replace("\n", " ").strip() for r in records
+                    if isinstance(r.get("text"), str) and r["text"].replace(PREFIX, "", 1).strip())
+
+
+def covering(records, span: tuple[float, float]) -> list[dict]:
+    return [r for r in records or [] if (s := interval(r)) and overlaps(s, span)]
+
+
+NO_TEXT = "（这一段没有文字）"
+
+
+def review_item(span: dict, final: list[dict], version: str, live, filename: str) -> str:
+    """The one point to check for a weak span (GUI-4 fix): its time range as the title, the final
+    segments it marked (the ones carrying PREFIX in the notes input) cited after the title, and
+    the full text of each version underneath, as a nested list so that the whole entry stays one
+    list item for gui.review.parse. With the refined version, the live text is taken over the span
+    widened to the refined segments it marked, so both versions cover the same audio."""
+    window = (span["start"], span["end"])
+    marked = covering(final, window)
+    title = f"- **{MARK}，待核对：{clock_text(span['start'])}–{clock_text(span['end'])}**"
+    if version != "refined":
+        sources = ids_text([r["id"] for r in marked])
+        return f"{title} {sources}\n  - 实时版本：{joined(marked) or NO_TEXT}"
+    extent = (min([window[0]] + [interval(r)[0] for r in marked]), max([window[1]] + [interval(r)[1] for r in marked]))
+    heard = covering(live, extent)
+    refined_text, live_text = joined(marked), joined(heard)
+    if marked:
+        sources = ids_text([r["id"] for r in marked])
+    else:  # Refinement wrote nothing here: point at the live segments instead.
+        sources = " ".join(f"[live-{run_label(a, b)}]({quote(filename)}#live-L{a})"
+                           for a, b in id_runs([r["id"] for r in heard]))
+    if refined_text and refined_text == live_text:
+        body = f"  - 校正版本与实时版本相同：{refined_text}"
     else:
-        versions = f"实时版本：{text}"
-    return f"- 这一段收音很弱，待核对 [L{record['id']}]：{versions}"
+        body = f"  - 校正版本：{refined_text or NO_TEXT}\n  - 实时版本：{live_text or NO_TEXT}"
+    return f"{title} {sources}".rstrip() + "\n" + body
+
+
+def review_items(directory: Path, final: list[dict], version: str, live, filename: str) -> list[tuple[float, str]]:
+    """(start, point) for each weak span analyse() recorded, in time order."""
+    return [(span["start"], review_item(span, final, version, live, filename)) for span in load(directory)]

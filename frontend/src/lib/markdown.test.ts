@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import { describe, expect, it } from "vitest";
 import { citeOf, renderInline, renderMarkdown, renderNote } from "./markdown";
+import { withoutSources } from "./note";
 
 describe("renderMarkdown", () => {
   it("removes scripts, event handlers and inline styles from model output", () => {
@@ -34,6 +35,19 @@ describe("renderMarkdown", () => {
     expect(html).toContain('<li class="review">待核对：符号约定');
     expect(html).toContain('<p class="review">待核对：板书未出现</p>');
     expect(html).toContain('<a href="https://x.example">链接</a> [L]');
+  });
+});
+
+describe("merged weak-span review point (GUI-4 fix)", () => {
+  it("renders the time range as the title and both versions as a list inside the one point", () => {
+    const point = "**这一段收音很弱，待核对：2:00–3:00** [refined-L3–L4](x.transcript.md#refined-L3)\n"
+      + "- 校正版本：在这一条件下，产值很低。\n- 实时版本：在这严重监督下 羼水也很为难";
+    const html = renderMarkdown(withoutSources(point));
+    expect(html).toContain("<strong>这一段收音很弱，待核对：2:00–3:00</strong>");
+    expect(html.match(/<li[ >]/g)).toHaveLength(2);
+    expect(html).toContain("校正版本：在这一条件下，产值很低。");
+    expect(html).toContain("实时版本：在这严重监督下 羼水也很为难");
+    expect(html).not.toContain("refined-L3");
   });
 });
 
