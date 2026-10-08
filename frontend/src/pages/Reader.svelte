@@ -4,9 +4,13 @@
   import Contents from "../components/reader/Contents.svelte";
   import TranscriptList from "../components/reader/TranscriptList.svelte";
   import { api } from "../lib/api";
-  import { renderInline, renderNote } from "../lib/markdown";
-  import { citeTarget, currentSection, inRange, parseNote, parseTranscript, reviewBody, type CiteTarget } from "../lib/note";
+  import { renderInline, renderMarkdown, renderNote } from "../lib/markdown";
+  import {
+    citeTarget, currentSection, inRange, parseNote, parseTranscript, reviewBody, reviewButton, reviewProgress,
+    sourceTarget, withoutSources, type CiteTarget,
+  } from "../lib/note";
   import { app, message } from "../lib/state.svelte";
+  import type { Review, ReviewItem } from "../lib/types";
 
   // 方案 B reader, simplified per plan 6.3: one column, contents on the left, sources in a side panel.
   let { course, file }: { course: string; file: string } = $props();
@@ -31,16 +35,37 @@
   let menuOpen = $state(false);
   let menuBox = $state<HTMLElement>();
   let menuButton = $state<HTMLButtonElement>();
+  // Plan GUI-3 item 4: the review points as a checklist (design/F-dialog.reference.html, right half).
+  let checklist = $state<Review | null>(null);
+  let checkError = $state("");
+  let saving = 0;  // Only the latest save's answer is applied.
 
   let note = $derived(content ? parseNote(content.main, course) : null);
   let transcript = $derived(content?.transcript ? parseTranscript(content.transcript) : null);
   let rendered = $derived(note ? renderNote(note.body, transcript?.version ?? "live") : null);
   let review = $derived(content?.review ? renderNote(reviewBody(content.review), transcript?.version ?? "live", "review").html : "");
+  let unchecked = $derived(checklist ? checklist.items.filter((item) => !item.checked).length : 0);
+  let button = $derived(checklist ? reviewButton(unchecked, checklist.items.length) : { label: "待核对", count: null });
+  let notices = $derived(checklist?.notices.length
+    ? renderNote(checklist.notices.join("\n\n"), transcript?.version ?? "live", "review").html : "");
   let found = $derived(!target || !!transcript?.groups.some((group) => group.segments.some((s) => inRange(s, target))));
 
   async function load() {
     try {
-      content = await api.noteContent(path);
+      const next = await api.noteContent(path);
+      // The checklist arrives with the content, so the panel never switches layout under the reader.
+      const asked = saving;
+      let list = next.review ? checklist : null;
+      if (next.review) {
+        try {
+          list = await api.review(path);
+        } catch {
+          // Without a checklist the panel shows the review file as text, as before.
+        }
+      }
+      content = next;
+      // A tick saved meanwhile wins over this older answer.
+      if (asked === saving) checklist = list;
       error = "";
       // Home's "N 处待核对" opens the note with the review panel showing.
       if (app.panel === "review" && content.review) {
@@ -53,6 +78,30 @@
     }
   }
   load();
+
+  async function store(checked: string[]) {
+    const previous = checklist;
+    const ticket = ++saving;
+    checklist = checklist && { ...checklist, items: checklist.items.map((item) => ({ ...item, checked: checked.includes(item.id) })) };
+    checkError = "";
+    try {
+      const result = await api.saveReview(path, checked);
+      if (ticket === saving) checklist = result;
+    } catch (e) {
+      if (ticket === saving) {
+        checklist = previous;
+        checkError = message(e);
+      }
+    }
+  }
+
+  function toggle(item: ReviewItem) {
+    if (!checklist) return;
+    const ids = checklist.items.filter((other) => (other.id === item.id ? !item.checked : other.checked)).map((other) => other.id);
+    store(ids);
+  }
+
+  const checkAll = () => checklist && store(checklist.items.map((item) => item.id));
 
   $effect(() => {
     if (!note?.recording) return;
@@ -82,7 +131,7 @@
     trigger = null;
   }
 
-  const toggle = (kind: "transcript" | "review", event: MouseEvent) =>
+  const togglePanel = (kind: "transcript" | "review", event: MouseEvent) =>
     panel === kind ? closePanel() : showPanel(kind, event.currentTarget as HTMLElement);
 
   // References open the transcript panel instead of following a link; other links never replace the app.
@@ -213,11 +262,11 @@
     <div class="actions">
       {#if content?.transcript}
         <button type="button" class="text-btn" aria-expanded={panel === "transcript"} aria-controls="reader-panel"
-          onclick={(event) => toggle("transcript", event)}>原始转录</button>
+          onclick={(event) => togglePanel("transcript", event)}>原始转录</button>
       {/if}
       {#if content?.review}
         <button type="button" class="text-btn" aria-expanded={panel === "review"} aria-controls="reader-panel"
-          onclick={(event) => toggle("review", event)}>待核对</button>
+          onclick={(event) => togglePanel("review", event)}>{button.label}{#if button.count != null}<span class="num">{button.count}</span>{/if}</button>
       {/if}
       <div class="open-menu">
         <button type="button" class="text-btn" bind:this={menuButton} aria-haspopup="menu" aria-expanded={menuOpen}
@@ -233,7 +282,7 @@
     </div>
   </header>
 
-  <div class="layout" class:shifted={!!panel}>
+  <div class="layout" class:shifted={!!panel} class:wide={panel === "review" && !!checklist}>
     {#if rendered?.toc.length}
       <aside class="side"><Contents entries={rendered.toc} {current} onjump={jump} /></aside>
     {/if}
@@ -265,14 +314,58 @@
     </article>
   </div>
 
-  <aside id="reader-panel" class="panel" class:open={!!panel} inert={!panel} bind:this={panelBox}
-    aria-label={shown === "review" ? "待核对与处理记录" : "原始转录"}>
-    <div class="panel-head">
-      <h2 tabindex="-1" bind:this={panelTitle}>{shown === "review" ? "待核对与处理记录" : "原始转录"}</h2>
-      <button type="button" class="close" aria-label="关闭面板" title="关闭（Esc）" onclick={closePanel}><Icon name="fail" /></button>
-    </div>
-    <div class="panel-body" bind:this={panelBody}>
-      {#if shown === "review"}
+  <aside id="reader-panel" class="panel" class:open={!!panel} class:checklist={shown === "review" && !!checklist}
+    inert={!panel} bind:this={panelBox} aria-label={shown === "review" ? (checklist && !checklist.items.length ? "处理记录" : "待核对") : "原始转录"}>
+    {#if shown === "review" && checklist}
+      <header class="review-head">
+        <div class="review-title">
+          <!-- A review file with processing notices only has nothing to tick. -->
+          <h2 tabindex="-1" bind:this={panelTitle}>{checklist.items.length ? "待核对" : "处理记录"}</h2>
+          {#if checklist.items.length}<span class="progress">{reviewProgress(checklist.items)}</span>{/if}
+        </div>
+        <div class="review-actions">
+          {#if checklist.items.length}
+            <button type="button" class="all" onclick={checkAll} disabled={unchecked === 0}>全部标为已核对</button>
+          {/if}
+          <button type="button" class="close" aria-label="关闭面板" title="关闭（Esc）" onclick={closePanel}><Icon name="fail" /></button>
+        </div>
+      </header>
+    {:else}
+      <div class="panel-head">
+        <h2 tabindex="-1" bind:this={panelTitle}>{shown === "review" ? "待核对与处理记录" : "原始转录"}</h2>
+        <button type="button" class="close" aria-label="关闭面板" title="关闭（Esc）" onclick={closePanel}><Icon name="fail" /></button>
+      </div>
+    {/if}
+    <div class="panel-body" class:flush={shown === "review" && !!checklist} bind:this={panelBody}>
+      {#if shown === "review" && checklist}
+        {#if checklist.items.length}<p class="intro">模型没有把握的地方。对照课件确认后打勾，程序不会自动修改笔记。</p>{/if}
+        {#if checkError}<p class="error-text check-error" role="alert">{checkError}</p>{/if}
+        {#each checklist.items as item (item.id)}
+          <div class="item" class:done={item.checked}>
+            <input type="checkbox" id="check-{item.id}" checked={item.checked} onchange={() => toggle(item)} />
+            <div class="column">
+              <!-- Sanitised by DOMPurify inside renderMarkdown. -->
+              <label class="text" for="check-{item.id}">{@html renderMarkdown(withoutSources(item.text))}</label>
+              {#if item.sources.length}
+                <!-- Outside the label: a reference opens the transcript instead of ticking the point. -->
+                <div class="sources">
+                  {#each item.sources as source (source.label + source.version)}
+                    <button type="button" class="source" aria-label="原始转录 {source.label}" aria-controls="reader-panel"
+                      onclick={(event) => transcript && showPanel("transcript", event.currentTarget, sourceTarget(source, transcript.version))}>
+                      {source.label}</button>
+                  {/each}
+                </div>
+              {/if}
+            </div>
+          </div>
+        {/each}
+        {#if notices}
+          <div class="process">
+            {#if checklist.items.length}<span class="label">处理记录</span>{/if}
+            <div class="prose small" bind:this={reviewBox}>{@html notices}</div>
+          </div>
+        {/if}
+      {:else if shown === "review"}
         <p class="review-about">以下是模型没有把握的地方。请对照课件或录音确认；程序不会自动修改它们。</p>
         <div class="prose small" bind:this={reviewBox}>{@html review}</div>
       {:else if transcript}
@@ -372,6 +465,7 @@
   /* Wide windows make room for the open panel instead of covering the text. */
   @media (min-width: 1360px) {
     .layout.shifted { grid-template-columns: 200px minmax(0, 1fr) 400px; padding-right: 0; }
+    .layout.shifted.wide { grid-template-columns: 200px minmax(0, 1fr) 440px; }
   }
   @media (max-width: 1099px) {
     .layout { grid-template-columns: minmax(0, 1fr); padding: 40px 24px 96px; }
@@ -481,4 +575,48 @@
   .close:hover { background: #EFEFEC; }
   .panel-body { position: relative; flex: 1; overflow-y: auto; padding: 8px 32px 40px; }
   .missing { margin: 16px 0 0; font-size: 13px; line-height: 1.7; color: #5C5C5A; }
+
+  /* Plan GUI-3 item 4: values from design/F-dialog.reference.html (right section). */
+  .text-btn .num { margin-left: 6px; font-family: var(--mono); font-size: 13px; }
+  .panel.checklist { width: min(440px, 100vw); border-left-color: #111111; font-size: 16px; line-height: normal; }
+  .review-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 20px 24px; border-bottom: 1px solid #D9D9D6; }
+  .review-title { display: flex; align-items: baseline; gap: 12px; min-width: 0; }
+  .review-title h2 { font-family: "Noto Serif SC", var(--cjk-serif); font-weight: 600; font-size: 18px; color: #111111; }
+  .progress { font-family: var(--mono); font-size: 13px; color: #5C5C5A; white-space: nowrap; }
+  .review-actions { display: flex; align-items: center; gap: 4px; flex: none; }
+  /* The close button is not in the reference; the panel needs one for pointer users (Esc also closes). */
+  .review-actions .close { margin-right: -12px; }
+  .all {
+    height: 44px;
+    padding: 0 4px;
+    border: none;
+    background: transparent;
+    color: #111111;
+    font-size: 14px;
+    text-decoration: underline;
+    text-underline-offset: 4px;
+    cursor: pointer;
+    white-space: nowrap;
+  }
+  .all:disabled { color: #767674; cursor: default; }
+  .panel-body.flush { padding: 0 0 40px; }
+  .intro { margin: 0; padding: 16px 24px; font-size: 13px; line-height: 1.7; color: #5C5C5A; border-bottom: 1px solid #D9D9D6; }
+  .check-error { padding: 12px 24px 0; }
+  .item { display: flex; gap: 16px; padding: 18px 24px; border-bottom: 1px solid #D9D9D6; }
+  .item input { flex: none; width: 20px; height: 20px; margin: 2px 0 0; accent-color: #111111; cursor: pointer; }
+  .column { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+  .text { font-family: "Noto Serif SC", var(--cjk-serif); font-size: 15px; line-height: 1.75; color: #111111; overflow-wrap: anywhere; cursor: pointer; }
+  .text :global(:is(p, ul, ol, blockquote)) { margin: 0; }
+  .text :global(* + *) { margin-top: 6px; }
+  .text :global(:is(ul, ol)) { padding-left: 1.2em; }
+  .text :global(blockquote) { font-size: 14px; color: #5C5C5A; }
+  .text :global(code) { font-family: var(--mono); font-size: 0.85em; }
+  .item.done .text { color: #767674; text-decoration: line-through; }
+  .item.done .text :global(blockquote) { color: #767674; }
+  .sources { display: flex; flex-wrap: wrap; gap: 0 12px; }
+  .source { padding: 0; border: 0; background: none; font-family: var(--mono); font-size: 12px; color: #5C5C5A; cursor: pointer; }
+  .source:hover { color: #C42710; }
+  .item.done .source { color: #767674; }
+  .process { display: flex; flex-direction: column; gap: 8px; padding: 24px 24px 0; }
+  .process .label { font-family: var(--mono); font-size: 12px; letter-spacing: 0.08em; color: #5C5C5A; }
 </style>

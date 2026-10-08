@@ -1,6 +1,6 @@
 import type {
   AsrModel, Bootstrap, Check, Config, Course, Devices, KeyStatus, Missing, Note, OpenerKind, Openers, Problem, Result,
-  QwenLive, RunRecord, Snapshot, Task,
+  QwenLive, Review, RunRecord, Snapshot, Task,
 } from "./types";
 
 /** Every failure, including a lost connection, arrives as one of these. */
@@ -81,6 +81,9 @@ export const api = {
   runs: () => get<RunRecord[]>("/api/runs"),
   notes: (course: string) => get<Note[]>(`/api/notes?${query({ course })}`),
   noteContent: (path: string) => get<Record<string, string>>(`/api/notes/content?${query({ path })}`),
+  /** Plan GUI-3 item 4: the review points of a note and which are ticked; PUT stores exactly these ticks. */
+  review: (path: string) => get<Review>(`/api/notes/review?${query({ path })}`),
+  saveReview: (path: string, checked: string[]) => send<Review>("PUT", `/api/notes/review?${query({ path })}`, { checked }),
   deleteNote: (path: string) => request<{ ok: boolean; trashed: string[] }>("DELETE", `/api/notes?${query({ path })}`),
   open: (path: string, mode: "reveal" | "terminal" | "editor") => send<{ ok: boolean }>("POST", "/api/open", { path, mode }),
   openers: () => get<Openers>("/api/openers"),

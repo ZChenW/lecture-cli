@@ -116,3 +116,32 @@ export function currentSection(tops: { id: string; top: number }[], line: number
   }
   return current;
 }
+
+// --- Plan GUI-3 item 4: the review checklist -------------------------------------------------------
+
+// [live-L16](….transcript.md#live-L16) as storage.linked_sources writes it, and bare [L30] / [L3–L5, L8].
+const LINKED_SOURCE = /\s*\[(?:live|refined)-L\d+[^\]]*\]\([^)\s]*\.transcript\.md#[^)\s]*\)/g;
+const BARE_SOURCE = /\s*\[L\d+(?:\s*[–—-]\s*L?\d+)?(?: [0-9:.]+[–—-][0-9:.]+)?(?:\s*[,，、]\s*L\d+(?:\s*[–-]\s*L?\d+)?)*\](?!\()/g;
+
+/** A point's text without its references: they are listed under it (design/F-dialog.reference.html). */
+export function withoutSources(text: string): string {
+  return text.replace(LINKED_SOURCE, "").replace(BARE_SOURCE, "").replace(/[ \t]*·[ \t]*$/gm, "").trim();
+}
+
+/** "1 / 3 已核对". */
+export function reviewProgress(items: { checked: boolean }[]): string {
+  return `${items.filter((item) => item.checked).length} / ${items.length} 已核对`;
+}
+
+/** The reader's top-bar button: the unticked count, "已核对" once all are ticked; a review file with
+ *  only processing notices has nothing to tick. */
+export function reviewButton(unchecked: number, total: number): { label: string; count: number | null } {
+  if (total === 0) return { label: "处理记录", count: null };
+  if (unchecked === 0) return { label: "已核对", count: null };
+  return { label: "待核对", count: unchecked };
+}
+
+/** Where a listed reference points; bare ones use the note's source version. */
+export function sourceTarget(source: { version: string | null; first: number; last: number }, version: string): CiteTarget {
+  return { version: source.version ?? version, first: source.first, last: source.last };
+}

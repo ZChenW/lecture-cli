@@ -63,8 +63,14 @@ export interface Course { name: string; path: string; notes_count: number; last_
 export interface Note {
   name: string; path: string; started: string | null; kind: string | null;
   attachments: { transcript: boolean; live: boolean; review: boolean };
+  /** Plan GUI-3 item 4: unticked review points, and all of them. */
   review_count?: number;
+  review_total?: number;
 }
+export interface ReviewSource { version: "live" | "refined" | null; first: number; last: number; label: string }
+export interface ReviewItem { id: string; text: string; sources: ReviewSource[]; checked: boolean }
+/** GET/PUT /api/notes/review: the points to check, and the processing notices shown after them. */
+export interface Review { items: ReviewItem[]; notices: string[] }
 export interface AsrModel { name: string; family: "whisper" | "qwen"; cached: boolean; env_ready: boolean }
 /** Plan N3.1: GET /api/qwen-live, whether a Chinese lecture can switch to live Qwen. */
 export interface QwenLive { model: string; env_ready: boolean; cached: boolean; gpu: boolean; ready: boolean; install: string }

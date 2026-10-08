@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { citeTarget, currentSection, inRange, parseNote, parseTranscript, reviewBody } from "./note";
+import {
+  citeTarget, currentSection, inRange, parseNote, parseTranscript, reviewBody, reviewButton, reviewProgress, sourceTarget,
+  withoutSources,
+} from "./note";
 
 // Shaped exactly like storage.Journal.render() output.
 const MAIN = `# MATH421 · 2026-10-07T09:02:00-04:00
@@ -124,5 +127,27 @@ describe("reader helpers", () => {
     expect(currentSection(tops, 60)).toBe("a");
     expect(currentSection([{ id: "a", top: 300 }], 120)).toBe("a");
     expect(currentSection([], 120)).toBeNull();
+  });
+});
+
+describe("review checklist (plan GUI-3 item 4)", () => {
+  it("moves references out of a point's text", () => {
+    expect(withoutSources("讲义 R2 示意图方向有误 [live-L16](x.transcript.md#live-L16)。")).toBe("讲义 R2 示意图方向有误。");
+    expect(withoutSources("疑点 [L30]，另见 [L3–L5, L8]")).toBe("疑点，另见");
+    expect(withoutSources("待整理原文 · [live-L1–L2](x.transcript.md#live-L1)\n\n> [live-L1](x.transcript.md#live-L1) An eigenvector."))
+      .toBe("待整理原文\n\n> An eigenvector.");
+    expect(withoutSources("[课件](https://example.org/a.pdf) 第 3 页")).toBe("[课件](https://example.org/a.pdf) 第 3 页");
+  });
+
+  it("counts ticks and names the top-bar button", () => {
+    expect(reviewProgress([{ checked: true }, { checked: false }, { checked: false }])).toBe("1 / 3 已核对");
+    expect(reviewButton(2, 3)).toEqual({ label: "待核对", count: 2 });
+    expect(reviewButton(0, 3)).toEqual({ label: "已核对", count: null });
+    expect(reviewButton(0, 0)).toEqual({ label: "处理记录", count: null });
+  });
+
+  it("points listed references at the transcript", () => {
+    expect(sourceTarget({ version: "refined", first: 18, last: 19 }, "live")).toEqual({ version: "refined", first: 18, last: 19 });
+    expect(sourceTarget({ version: null, first: 30, last: 30 }, "live")).toEqual({ version: "live", first: 30, last: 30 });
   });
 });
