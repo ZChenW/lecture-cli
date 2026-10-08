@@ -4,11 +4,19 @@ The notes worker calls analyse() once, before the final notes. It reads the 10 s
 capture process appended to levels.jsonl (input_level.WeakInput) and both transcript versions, all on
 the same clock: recorded audio without pauses.
 
-- Reference level: the median RMS of the windows that overlap at least one live segment with
-  content. Fewer than REFERENCE_WINDOWS such windows: no judgement at all.
-- A weak window is WEAK_BELOW_DB or more below the reference. Neighbouring weak windows (next to
-  each other in levels.jsonl) form a span; spans shorter than MIN_SPAN_SECONDS are dropped, and so
-  are spans with no text in them (live or refined). Those are written to weak-spans.json.
+- Reference level: the REFERENCE_PERCENTILE-th percentile (linear interpolation) of the RMS of the
+  windows that overlap at least one live segment with content. A percentile rather than the median,
+  so that a lecture whose weak parts were still transcribed (weak windows with text outnumbering
+  normal ones) keeps the normal level as its reference.
+- A window is weak when either rule holds:
+  - relative: it is WEAK_BELOW_DB or more below the reference. Only with REFERENCE_WINDOWS or more
+    reference windows; with fewer there is no reference and this rule is skipped;
+  - absolute floor: it overlaps a segment with content (live or refined) and its RMS is below
+    FLOOR_DBFS, the level of the weak-input notice while recording (input_level.WEAK_DBFS). This
+    rule needs no reference, so it also applies to short recordings.
+- Neighbouring weak windows (next to each other in levels.jsonl) form a span, whichever rule made
+  each of them weak; spans shorter than MIN_SPAN_SECONDS are dropped, and so are spans with no text
+  in them (live or refined). Those are written to weak-spans.json.
 - Every final segment (refined when complete, else live) that overlaps a span gets PREFIX; see
   storage.final_events. Transcript files are never changed.
 - Stretches of GAP_SECONDS or more with no content segment in either version are listed as a
@@ -20,9 +28,12 @@ import json
 import math
 from pathlib import Path
 
+from .input_level import WEAK_DBFS
 from .storage import TEXT_MARKER, events, has_content, read_json, refined_events, write_json
 
 REFERENCE_WINDOWS = 6
+REFERENCE_PERCENTILE = 80
+FLOOR_DBFS = WEAK_DBFS  # -40 dBFS
 WEAK_BELOW_DB = 15.0
 MIN_SPAN_SECONDS = 20.0
 GAP_SECONDS = 180.0
@@ -83,22 +94,31 @@ def load_levels(directory: Path) -> list[dict]:
     return levels
 
 
-def median(values: list[float]) -> float:
+def percentile(values: list[float], share: float) -> float:
+    """Linear interpolation between the closest ranks (numpy's default); share in 0..100."""
     values = sorted(values)
-    middle = len(values) // 2
-    return values[middle] if len(values) % 2 else (values[middle - 1] + values[middle]) / 2
+    position = (len(values) - 1) * share / 100
+    low = math.floor(position)
+    high = min(low + 1, len(values) - 1)
+    return values[low] + (values[high] - values[low]) * (position - low)
 
 
 def find_spans(levels: list[dict], live, refined) -> tuple[float | None, list[dict]]:
     """(reference dBFS or None, weak spans with text in them)."""
     spoken = with_content(live)
+    texts = spoken + with_content(refined)
     reference = [w["rms_dbfs"] for w in levels if any(overlaps((w["start"], w["end"]), s) for s in spoken)]
-    if len(reference) < REFERENCE_WINDOWS:
-        return None, []
-    level = median(reference)
+    level = percentile(reference, REFERENCE_PERCENTILE) if len(reference) >= REFERENCE_WINDOWS else None
+
+    def weak(window) -> bool:
+        if level is not None and window["rms_dbfs"] <= level - WEAK_BELOW_DB:
+            return True
+        return (window["rms_dbfs"] < FLOOR_DBFS
+                and any(overlaps((window["start"], window["end"]), t) for t in texts))
+
     runs, current = [], None
     for window in levels:
-        if window["rms_dbfs"] <= level - WEAK_BELOW_DB:
+        if weak(window):
             if current is None:
                 current = [window["start"], window["end"]]
                 runs.append(current)
@@ -106,10 +126,9 @@ def find_spans(levels: list[dict], live, refined) -> tuple[float | None, list[di
                 current[1] = window["end"]
         else:
             current = None
-    texts = spoken + with_content(refined)
     spans = [{"start": start, "end": end} for start, end in runs
              if end - start >= MIN_SPAN_SECONDS and any(overlaps((start, end), t) for t in texts)]
-    return round(level, 1), spans
+    return (None if level is None else round(level, 1)), spans
 
 
 def find_gaps(live, refined, total: float) -> list[dict]:

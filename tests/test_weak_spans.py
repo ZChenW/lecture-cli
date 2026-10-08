@@ -58,12 +58,30 @@ def workspace(tmp_path, levels, live, refined=None, captured=None):
 
 # --- Q3.3 the rules --------------------------------------------------------------------------------
 
-def test_reference_is_the_median_of_windows_with_live_text():
-    levels = windows((6, -20), (3, -30), (3, -60))
+def test_reference_is_the_80th_percentile_of_windows_with_live_text():
+    levels = windows((4, -20), (5, -30), (3, -60))
     live = every(0, 90, "讲")  # text in the first nine windows only
     reference, spans = weak_spans.find_spans(levels, live, None)
-    assert reference == -20.0  # median of six at -20 and three at -30
+    assert reference == -20.0  # the median of four at -20 and five at -30 would be -30
     assert spans == []  # the -60 windows have no text in them
+    assert weak_spans.percentile([1, 2, 3, 4, 5], 80) == pytest.approx(4.2)
+    assert weak_spans.percentile([7], 80) == 7
+
+
+def test_absolute_floor_marks_windows_with_text_below_minus_40_dbfs():
+    # A quiet lecture: reference -40.1, so the relative rule would need -55.1 and marks nothing.
+    levels = windows((6, -45), (2, -40.0), (2, -40.1), (2, -45))
+    live = every(0, 120, "讲")
+    reference, spans = weak_spans.find_spans(levels, live, None)
+    assert reference == -40.1
+    # -40.0 is not below the floor; every window from 80 s on is, and each holds text.
+    assert spans == [{"start": 0.0, "end": 60.0}, {"start": 80.0, "end": 120.0}]
+    # Without text in a window the floor does not apply to it.
+    assert weak_spans.find_spans(windows((6, -20), (3, -45)), every(0, 60, "讲"), None)[1] == []
+    # Fewer than six reference windows: no relative rule, but the floor still marks text.
+    short = windows((3, -20), (3, -50))
+    live = every(0, 20, "讲") + every(30, 60, "弱", first_id=3)  # five windows with text
+    assert weak_spans.find_spans(short, live, None) == (None, [{"start": 30.0, "end": 60.0}])
 
 
 def test_fewer_than_six_reference_windows_give_no_judgement():
@@ -235,11 +253,16 @@ def incident(tmp_path, variant):
 
     -40 dB: live recognised nothing in the weak parts; refinement rewrote the last part into text
     that is not in the original. -30 dB: live caught fragments in the first weak part; refinement
-    dropped that part entirely."""
-    weak = {"-40": -58.0, "-30": -49.0}[variant]
+    dropped that part entirely. "-30 whisper": the reviewer's run (GUI-4 fix) — live Whisper
+    transcribed both weak parts throughout, so weak windows with text are two thirds of the
+    reference windows and their median is the weak level itself."""
+    weak = {"-40": -58.0, "-30": -49.0, "-30 whisper": -53.0}[variant]
     levels = windows((6, weak), (6, -23), (6, weak))
     normal = every(60, 120, "正常朗读", step=5, first_id=1)
-    if variant == "-40":
+    if variant == "-30 whisper":
+        live = every(0, 180, "朗读", step=10)
+        refined = [seg(1, 0, 58, "开头一段校正。"), seg(2, 60, 118, "中间正常朗读的校正。"), seg(3, 120, 178, "最后一段校正。")]
+    elif variant == "-40":
         live = normal
         refined = [seg(1, 2, 58, "开头一段校正。"), seg(2, 60, 120, "中间正常朗读的校正。"),
                    seg(3, 121, 178, "在这一条件下，产值很低……便改与专管工钱的李寡妇了。")]
@@ -251,7 +274,7 @@ def incident(tmp_path, variant):
     return workspace(tmp_path, levels, live, refined, captured=180)
 
 
-@pytest.mark.parametrize("variant", ["-40", "-30"])
+@pytest.mark.parametrize("variant", ["-40", "-30", "-30 whisper"])
 def test_incident_two_marks_both_weak_parts_and_not_the_middle(tmp_path, variant):
     directory = incident(tmp_path, variant)
     hints = weak_spans.analyse(directory)
@@ -269,13 +292,43 @@ def test_incident_two_marks_both_weak_parts_and_not_the_middle(tmp_path, variant
     assert review.count("这一段收音很弱，待核对") == len(final) - len(middle)
 
 
-def test_incident_two_at_its_original_length_is_not_judged(tmp_path):
-    """60 s: two normal windows only, below the plan's minimum of six. Nothing is marked."""
+def test_the_reviewers_case_needs_the_new_rules(tmp_path):
+    """3 min, weak/normal/weak at -30 dB, all transcribed live: the old median rule marked nothing.
+    Each new rule marks both weak parts on its own."""
+    directory = incident(tmp_path, "-30 whisper")
+    levels = weak_spans.load_levels(directory)
+    live = events(directory)
+    reference = [w["rms_dbfs"] for w in levels]  # every window holds live text here
+    assert sum(r == -53.0 for r in reference) == 12 and len(reference) == 18
+    assert weak_spans.percentile(reference, 50) == -53.0  # the old reference: nothing is 15 dB below it
+    assert weak_spans.find_spans(levels, live, None)[0] == -23.0
+    expected = [{"start": 0.0, "end": 60.0}, {"start": 120.0, "end": 180.0}]
+    louder = [{**w, "rms_dbfs": w["rms_dbfs"] + 20} for w in levels]  # -33 / -3: above the floor
+    assert weak_spans.find_spans(louder, live, None) == (-3.0, expected)  # the percentile alone
+    quieter = [{**w, "rms_dbfs": -45.0 if w["rms_dbfs"] == -23.0 else -53.0} for w in levels]
+    assert weak_spans.find_spans(quieter, live, None) == (-45.0, [{"start": 0.0, "end": 180.0}])  # the floor alone
+
+
+def test_weak_parts_beyond_a_fifth_of_the_reference_are_left_to_the_floor():
+    """The percentile keeps the normal level only while normal windows are at least a fifth of the
+    windows with live text; past that, only the -40 dBFS floor can still mark the weak parts."""
+    live = every(0, 360, "讲")
+    above_floor = windows((30, -38), (6, -8))  # five weak minutes at -38, one normal at -8
+    assert weak_spans.find_spans(above_floor, live, None) == (-38.0, [])
+    below_floor = windows((30, -48), (6, -18))
+    assert weak_spans.find_spans(below_floor, live, None)[1] == [{"start": 0.0, "end": 300.0}]
+
+
+def test_incident_two_at_its_original_length_is_marked_by_the_floor_only(tmp_path):
+    """60 s: two normal windows only, below the minimum of six, so there is no reference. The floor
+    still marks the weak part that holds text (the rewritten ending); the opening weak part has no
+    text in either version and is not marked."""
     levels = windows((2, -58), (2, -23), (2, -58))
     directory = workspace(tmp_path, levels, every(20, 40, "正常", step=5),
                           [seg(1, 41, 59, "便改与专管工钱的李寡妇了。")], captured=60)
-    assert weak_spans.analyse(directory) == []
-    assert read_json(directory / "weak-spans.json") == {"reference_dbfs": None, "spans": [], "gaps": []}
+    assert weak_spans.analyse(directory) == ["0:40–1:00 收音很弱，相关内容已标为待核对。"]
+    assert read_json(directory / "weak-spans.json") == {"reference_dbfs": None,
+                                                         "spans": [{"start": 40.0, "end": 60.0}], "gaps": []}
 
 
 # --- worker and controller hand-off -----------------------------------------------------------------
