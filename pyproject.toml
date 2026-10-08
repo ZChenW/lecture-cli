@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "lecture-cli"
-version = "0.1.0"
-description = "Local lecture transcription and DeepSeek notes"
+version = "0.2.0"
+description = "Lecture transcription and Chinese class notes, with local or cloud speech recognition and any OpenAI-compatible notes service"
 requires-python = ">=3.11,<3.14"
 dependencies = [
   "rich>=13,<15",
@@ -20,9 +20,11 @@ lecture = "lecture_cli.cli:main"
 [project.optional-dependencies]
 local = ["whisperlivekit @ git+https://github.com/QuentinFuxa/WhisperLiveKit.git@363e4f6d029694d9c81ae548beddd9d3c88a3637"]
 gpu = ["nvidia-cublas-cu12>=12,<13", "nvidia-cudnn-cu12>=9,<10"]
+gui = ["starlette>=1,<2", "uvicorn>=0.30,<1"]
+gui-window = ["pywebview[qt]>=6,<7"]
 
 [tool.setuptools.package-data]
-lecture_cli = ["completions/_lecture"]
+lecture_cli = ["completions/_lecture", "gui/static/*", "gui/static/**/*"]
 
 [tool.setuptools.packages.find]
 include = ["lecture_cli*"]

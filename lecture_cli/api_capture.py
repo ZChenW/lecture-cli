@@ -16,7 +16,9 @@ import numpy as np
 from .audio_buffer import AudioBuffer, drain_timeout
 from .capture import Transcript
 from .refinement import BYTES_PER_SECOND, segment_cut
-from .storage import read_json, write_json
+from .storage import has_content, read_json, write_json
+from .mic_gain import mic_gain
+from .input_level import NOTICE as WEAK_NOTICE, WeakInput
 
 API_TIMEOUT = httpx.Timeout(60, connect=10)
 RETRY_WARNING = "转录服务暂不可用，正在重试；音频已暂存"
@@ -106,6 +108,9 @@ def consume_response(transcript, result, offset, duration):
         text = segment["text"].strip()
         if not text:
             continue
+        # Plan GUI-4 Q1.1: checked before the 疑似重复 prefix, which itself contains CJK text.
+        if not has_content(text):
+            continue
         if segment.get("compression_ratio", 0) > 2.4:
             text = "[疑似重复，待核对] " + text
         if not pending:
@@ -139,17 +144,28 @@ async def record(directory: Path, transport=None):
         finished = asyncio.Event()
         extracted = 0.0
         last_write = 0.0
+        gain = mic_gain(meta)
+        weak = WeakInput()
+        weak.levels_path = directory / "levels.jsonl"  # Plan GUI-4 Q3.2: read by weak_spans after class.
 
         def publish(force=False):
             nonlocal last_write
             if not force and time.monotonic() - last_write < 0.15:
                 return
+            if gain:
+                state["gain_notice"] = gain.notice
+                if gain.adjusted is not None:
+                    state["gain_volume"] = gain.adjusted  # Plan N3.5: restored after the run when unchanged.
+                if gain.change:
+                    state["gain_change"] = gain.change  # Plan GUI-4 Q2.3: GUI banner only, never the note.
             state.update(audio.snapshot(), lag=max(0, extracted - state["seconds"]),
                          last=transcript.last, count=transcript.count)
             write_json(state_path, state)
             last_write = time.monotonic()
 
         def callback(indata, frames, timing, status):
+            if gain:
+                gain.observe(indata[:, 0])
             data = np.clip(indata[:, 0], -1, 1)
             pcm = (data * 32767).astype(np.int16).tobytes()
             audio.push(pcm, float(np.sqrt(np.mean(data * data))), bool(status.input_overflow))
@@ -161,9 +177,16 @@ async def record(directory: Path, transport=None):
                 if want_pause != paused:
                     paused = want_pause
                     audio.pause(paused)
+                    weak.pause()
+                    if gain:
+                        gain.pause(paused)
                     if stream:
                         stream.stop() if paused else stream.start()
                     state["status"] = "已暂停" if paused else "录制中"
+                    publish(True)
+                if gain:
+                    gain.weak = weak.notice == WEAK_NOTICE  # Plan GUI-4 Q2.2: raises only while it shows.
+                if gain and gain.poll():
                     publish(True)
                 publish()
                 # File input has no real-time pacing with --fast; do not outrun the bounded queue.
@@ -195,6 +218,12 @@ async def record(directory: Path, transport=None):
                 if pcm:
                     pending.extend(pcm)
                     extracted += len(pcm) / BYTES_PER_SECOND
+                    if weak.add(pcm, transcript.count):
+                        # GUI-only, never "warning": retries clear that one, and the saved note reports it.
+                        # Only a long total reaches the note, as one summary sentence.
+                        state["weak_input"] = weak.notice
+                        state["weak_input_seconds"] = weak.seconds
+                        publish(True)
                     publish()
                 elif not finished.is_set():
                     await asyncio.sleep(0.05)

@@ -4,18 +4,36 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import re
 import signal
 import time
 from pathlib import Path
 
-from .storage import read_json, write_json
+from .storage import has_content, read_json, write_json
 from .audio_buffer import AudioBuffer, drain_timeout
 from .asr import build_engine, session_context
+from .mic_gain import mic_gain
+from .input_level import NOTICE as WEAK_NOTICE, WeakInput
 
 
 def timestamp(seconds: float) -> str:
     seconds = round(seconds, 2)  # 59.997 must carry into the minute, not print as 60.00
     return f"{int(seconds) // 3600:02}:{int(seconds) // 60 % 60:02}:{seconds % 60:05.2f}"
+
+
+# Chinese, Japanese and Korean script (kana, CJK ideographs, Hangul).
+CJK = re.compile(r"[\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff\uac00-\ud7af]")
+SENTENCE_ENDS = (".", "?", "!", "。", "？", "！")
+LIMIT = 240
+CJK_LIMIT = 120
+PAUSE_SECONDS = 0.6
+PAUSE_MIN_CHARS = 12
+
+
+def cjk_majority(text: str) -> bool:
+    """More CJK characters than other letters and digits; spaces and punctuation do not count."""
+    cjk = len(CJK.findall(text))
+    return cjk > sum(1 for c in text if c.isalnum()) - cjk
 
 
 class Transcript:
@@ -34,6 +52,9 @@ class Transcript:
     def append(self, text: str, start: float, end: float) -> None:
         if not text.strip():
             return
+        # Plan GUI-4 Q1.1: punctuation alone is dropped and never takes a segment number.
+        if not has_content(text):
+            return
         self.count += 1
         record = {"id": self.count, "start": timestamp(start), "end": timestamp(end), "text": text.strip()}
         with (self.directory / "transcript.jsonl").open("a", encoding="utf-8") as f:
@@ -50,9 +71,26 @@ class Transcript:
                 if key in self.seen:
                     continue
                 self.seen.add(key)
-                self.pending.append(token)
-                if token.text.rstrip().endswith((".", "?", "!", "。", "？", "！")) or len(self.pending_text) >= 240:
+                if self.paused_before(token):
                     self.flush()
+                self.pending.append(token)
+                text = self.pending_text
+                limit = CJK_LIMIT if cjk_majority(text) else LIMIT
+                if token.text.rstrip().endswith(SENTENCE_ENDS) or len(text) >= limit:
+                    self.flush()
+
+    def paused_before(self, token) -> bool:
+        """Whisper's Chinese output often has no punctuation at all: a spoken pause ends the segment
+        instead, once there is enough text to stand alone. Latin-script text keeps the old rules."""
+        if not self.pending:
+            return False
+        text = self.pending_text
+        try:
+            gap = token.start - self.pending[-1].end
+        except TypeError:
+            return False
+        # Timestamps are floats: 0.6 s computed as 7.85 - 7.25 must still count as 0.6 s.
+        return gap >= PAUSE_SECONDS - 1e-6 and len(text.strip()) >= PAUSE_MIN_CHARS and cjk_majority(text)
 
     @property
     def pending_text(self) -> str:
@@ -87,10 +125,19 @@ async def record(directory: Path) -> None:
     collector = None
     paused = False
     last_write = 0.0
+    gain = mic_gain(meta)
+    weak = WeakInput()
+    weak.levels_path = directory / "levels.jsonl"  # Plan GUI-4 Q3.2: read by weak_spans after class.
 
     def publish(force=False):
         nonlocal last_write
         if force or time.monotonic() - last_write > 0.15:
+            if gain:
+                state["gain_notice"] = gain.notice
+                if gain.adjusted is not None:
+                    state["gain_volume"] = gain.adjusted  # Plan N3.5: restored after the run when unchanged.
+                if gain.change:
+                    state["gain_change"] = gain.change  # Plan GUI-4 Q2.3: GUI banner only, never the note.
             if not meta.get("audio_file"):
                 state.update(audio.snapshot())
             if state.get("input_overflows"):
@@ -103,6 +150,8 @@ async def record(directory: Path) -> None:
 
     def callback(indata, frames, timing, status):
         # Never call ASR or the network on PortAudio's callback thread.
+        if gain:
+            gain.observe(indata[:, 0])
         data = np.clip(indata[:, 0], -1, 1)
         pcm = (data * 32767).astype(np.int16).tobytes()
         level = float(np.sqrt(np.mean(data * data)))
@@ -144,10 +193,17 @@ async def record(directory: Path) -> None:
             if want_pause != paused:
                 paused = want_pause
                 audio.pause(paused)
+                weak.pause()
+                if gain:
+                    gain.pause(paused)
                 if stream:
                     stream.stop() if paused else stream.start()
                 state["status"] = "已暂停" if paused else "录制中"
                 state["level"] = 0
+                publish(True)
+            if gain:
+                gain.weak = weak.notice == WEAK_NOTICE  # Plan GUI-4 Q2.2: raises only while it shows.
+            if gain and gain.poll():
                 publish(True)
             if paused and not audio.snapshot()["queued"]:
                 await asyncio.sleep(0.1)
@@ -170,6 +226,11 @@ async def record(directory: Path) -> None:
                 archive.append(pcm)
             await processor.process_audio(pcm)
             state["seconds"] += len(pcm) / 32000
+            if weak.add(pcm, transcript.count):
+                # GUI-only, never "warning": the saved note reports that one; only a long total is summarised.
+                state["weak_input"] = weak.notice
+                state["weak_input_seconds"] = weak.seconds
+                publish(True)
             publish()
         if stream:
             stream.stop()
@@ -186,7 +247,7 @@ async def record(directory: Path) -> None:
             await processor.process_audio(b"")
             await collector
         transcript.flush()
-        if state["buffer"]:
+        if state["buffer"] and has_content(state["buffer"]):
             transcript.append("[未确认尾部，待核对] " + state["buffer"], state["seconds"], state["seconds"])
         state.update(status="转录完成", buffer="", lag=0)
         publish(True)

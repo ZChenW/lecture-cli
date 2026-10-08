@@ -1,0 +1,223 @@
+:root {
+  --cjk-sans: "Noto Sans CJK SC", "Source Han Sans SC", "WenQuanYi Micro Hei", sans-serif;
+  --cjk-serif: "Noto Serif CJK SC", "Source Han Serif SC", serif;
+}
+
+/* 方案 A · 夜幕: onboarding (and later recording). */
+.night {
+  color-scheme: dark;
+  --bg: #0b0c0e;
+  --fg: #eceae4;
+  --text: #eceae4;
+  --muted: #a9abb0;
+  --faint: #8e9096;
+  --line: #1d1f23;
+  --card-line: #23252a;
+  --control-line: #34363b;
+  --card: rgba(255, 255, 255, 0.025);
+  --field: rgba(255, 255, 255, 0.04);
+  --accent: #d4ff5c;
+  --select: #d4ff5c;
+  --focus: #d4ff5c;
+  --primary: #d4ff5c;
+  /* Fields and the custom dropdown (design/E-wizard.reference.html; list colours from plan N2.1). */
+  --field-line: #5e6067;
+  --label: #8e9096;
+  --tab-line: #23252a;
+  --dd-bg: #15171a;
+  --dd-border: #34363b;
+  --dd-hover: #23252a;
+  --dd-shadow: 0 12px 32px rgba(0, 0, 0, 0.45);
+  --on-primary: #0b0c0e;
+  --warn: #ffb454;
+  --error: #ff6b5e;
+  --ok: #d4ff5c;
+  --ui: "Geist", var(--cjk-sans);
+  --mono: "Geist Mono", ui-monospace, monospace;
+  --display: "Instrument Serif", var(--cjk-serif);
+}
+
+/* 方案 B · 纸页: home, settings, reading. */
+.paper {
+  color-scheme: light;
+  --bg: #fbfbfa;
+  --fg: #111111;
+  --text: #2a2a29;
+  --muted: #5c5c5a;
+  --faint: #767674;
+  --line: #d9d9d6;
+  --card-line: #d9d9d6;
+  --control-line: #111111;
+  --card: transparent;
+  --field: #ffffff;
+  --accent: #c42710;
+  /* Selected choices use ink: 方案 B keeps the accent for the current course and link hovers. */
+  --select: #111111;
+  /* Ink, not the accent: a red ring around a field reads as an error. */
+  --focus: #111111;
+  --primary: #111111;
+  /* Fields and the custom dropdown (design/D-settings.reference.html). */
+  --field-line: #111111;
+  --label: #5c5c5a;
+  --tab-line: #d9d9d6;
+  --dd-bg: #ffffff;
+  --dd-border: #111111;
+  --dd-hover: #f1f1ee;
+  --dd-shadow: 0 12px 32px rgba(17, 17, 17, 0.10);
+  --on-primary: #fbfbfa;
+  /* Darker than the accent so warnings never read as a third accent use (both ≥ 6:1 on --bg). */
+  --warn: #8a5300;
+  --error: #9b1c0c;
+  --ok: #2a5e1e;
+  --ui: "Geist", var(--cjk-sans);
+  --mono: "DM Mono", ui-monospace, monospace;
+  --display: "Source Serif 4", var(--cjk-serif);
+}
+
+*, *::before, *::after { box-sizing: border-box; }
+html, body { margin: 0; }
+body { min-width: 320px; }
+.app {
+  min-height: 100vh;
+  background: var(--bg);
+  color: var(--fg);
+  font-family: var(--ui);
+  font-size: 15px;
+  line-height: 1.6;
+  /* Browsers that support it add the CJK–Latin gap, so text never needs literal spaces for it. */
+  text-autospace: normal;
+}
+h1, h2, h3, p { margin: 0; }
+/* The bundled math font, never a system one: installed fonts rarely carry the MATH table. */
+math { font-family: "STIX Two Math", math; }
+button, input, select { font: inherit; color: inherit; }
+a { color: inherit; }
+.paper a:hover { color: var(--accent); }
+:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+/* On bordered controls the ring joins the border, so it reads as one solid line, not two. */
+.paper .btn:focus-visible { outline-offset: 0; }
+
+.btn {
+  min-height: 44px;
+  padding: 0 20px;
+  border-radius: 999px;
+  border: 1px solid var(--control-line);
+  background: transparent;
+  color: var(--fg);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.btn.primary { background: var(--primary); color: var(--on-primary); border-color: var(--primary); font-weight: 600; }
+.btn.large { min-height: 56px; padding: 0 28px; }
+.btn:disabled { opacity: 0.45; cursor: not-allowed; }
+/* A primary action that is not yet available keeps its colour as an outline. */
+.btn.primary:disabled { opacity: 0.7; background: transparent; color: var(--primary); }
+.icon-btn { width: 44px; padding: 0; }
+.link-btn {
+  min-height: 44px;
+  border: none;
+  background: none;
+  padding: 0;
+  color: var(--muted);
+  cursor: pointer;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+/* The reference's text actions: "测试连接", "保存到本机", "试一下". */
+.text-action {
+  height: 44px;
+  padding: 0 12px;
+  border: none;
+  background: transparent;
+  color: var(--fg);
+  font-size: 14px;
+  text-decoration: underline;
+  text-underline-offset: 4px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.text-action:disabled { opacity: 0.5; cursor: progress; }
+
+.field { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+/* Field labels: 13px as in both references; Chinese labels track 0.08em (standing preference),
+   the English-only "API key" keeps the reference's normal spacing.
+   Letter-spacing rule (user-confirmed): form field labels 0.08em; section headings such as
+   "实时转录" "随堂笔记" "正在整理笔记" "课堂结束" "录制中" (StateLabel) 0.24em. The recording
+   screens' existing 0.24em values stay as they are. */
+.field > span:not(.field-note), .field > label, .label {
+  font-size: 13px;
+  letter-spacing: 0.08em;
+  color: var(--label);
+}
+.field > .latin, .label.latin { letter-spacing: normal; }
+.field-note { font-size: 12px; color: var(--label); }
+.field-note.long { line-height: 1.7; }
+/* Rule 3: no box, no radius, only an underline that thickens to 2px on focus. */
+.input {
+  height: 44px;
+  padding: 0 2px;
+  border: none;
+  border-bottom: 1px solid var(--field-line);
+  border-radius: 0;
+  background: transparent;
+  font-size: 15px;
+  width: 100%;
+  min-width: 0;
+}
+.input:focus-visible { outline: none; border-bottom-width: 2px; }
+.input::placeholder { color: var(--faint); }
+.input:disabled { opacity: 0.6; }
+.hint { font-size: 13px; color: var(--muted); }
+.error-text { font-size: 13px; color: var(--error); }
+.warn-text { font-size: 13px; color: var(--warn); }
+.ok-text { font-size: 13px; color: var(--ok); }
+.mono { font-family: var(--mono); }
+.row { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; }
+.stack { display: flex; flex-direction: column; gap: 16px; }
+pre.log {
+  margin: 0;
+  max-height: 240px;
+  overflow: auto;
+  padding: 12px 14px;
+  border: 1px solid var(--card-line);
+  font-family: var(--mono);
+  font-size: 12px;
+  white-space: pre-wrap;
+  color: var(--muted);
+}
+/* A small tooltip shown on hover and keyboard focus (title attributes do not show on focus). */
+.has-tip { position: relative; }
+.tip {
+  position: absolute;
+  bottom: calc(100% + 8px);
+  right: 0;
+  z-index: 10;
+  padding: 6px 10px;
+  background: var(--fg);
+  color: var(--bg);
+  font-size: 12px;
+  font-weight: 400;
+  line-height: 1.5;
+  letter-spacing: normal;
+  white-space: nowrap;
+  text-decoration: none;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 120ms ease;
+}
+.has-tip:hover > .tip, .has-tip:focus-visible > .tip { opacity: 1; transition-delay: 300ms; }
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation: none !important; transition: none !important; scroll-behavior: auto !important; }
+}

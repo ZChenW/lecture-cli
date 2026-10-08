@@ -6,7 +6,7 @@ import pytest
 from lecture_cli import final_notes, worker
 from lecture_cli.asr import session_context
 from lecture_cli.glossary import load_glossary, notes_glossary, terminology_warnings
-from lecture_cli.storage import Journal, linked_sources, write_json
+from lecture_cli.storage import ATTACHMENT_DIR, Journal, linked_sources, write_json
 
 
 @pytest.fixture
@@ -14,7 +14,7 @@ def lecture(tmp_path):
     directory = tmp_path / 'session'
     directory.mkdir()
     write_json(directory / 'session.json', dict(course='MATH481', started='synthetic',
-               model='deepseek-flash', output=str(tmp_path / 'notes.md')))
+               notes_model='deepseek-flash', output=str(tmp_path / 'notes.md')))
     source = [dict(id=i, start=f'00:00:{i:02}', end=f'00:00:{i+1:02}',
                    text=f'Original statement {i}.') for i in range(1, 9)]
     (directory / 'transcript.jsonl').write_text(''.join(json.dumps(r) + '\n' for r in source))
@@ -40,7 +40,7 @@ def test_topic_continues_across_request_boundary_and_originals_reach_writer(lect
         text = prompt.split('本章完整原始转录：')[1].split('后文衔接')[0]
         ids = [int(n) for n in re.findall(r'\[L(\d+) ', text)]
         seen.extend(ids)
-        return json.dumps(dict(body=f'理解连续变形。[L{ids[0]}]', review=f'- 缺少图示。[L{ids[-1]}]'))
+        return f'理解连续变形。[L{ids[0]}]\n<!-- REVIEW -->\n- 缺少图示。[L{ids[-1]}]'
     final_notes.generate(journal, source, api)
     outline = json.loads(dict(journal.db.execute('SELECT key, value FROM info'))['outline'])
     assert len(outline) == 1 and outline[0]['first'] == 1 and outline[0]['last'] == 8
@@ -48,7 +48,7 @@ def test_topic_continues_across_request_boundary_and_originals_reach_writer(lect
     main = (journal.directory.parent / 'notes.md').read_text()
     assert main.count('**平面同痕**') == 1
     assert '缺少图示' not in main
-    assert '缺少图示' in (journal.directory.parent / 'notes.review.md').read_text()
+    assert '缺少图示' in (journal.directory.parent / ATTACHMENT_DIR / 'notes.review.md').read_text()
     assert 'notes.transcript.md#live-L1' in main
     # Saved plan and chapters allow a render-only resume, with no new model calls.
     final_notes.generate(journal, source, lambda *a: pytest.fail('unexpected API request'))
@@ -62,7 +62,7 @@ def test_invalid_outline_preserves_sources_without_pretending_complete(lecture, 
     final_notes.generate(journal, source, lambda *a: json.dumps(result))
     info = dict(journal.db.execute('SELECT key, value FROM info'))
     assert info['detail_status'] == 'incomplete'
-    assert all(r['text'] in (journal.directory.parent / 'notes.transcript.md').read_text() for r in source)
+    assert all(r['text'] in (journal.directory.parent / ATTACHMENT_DIR / 'notes.transcript.md').read_text() for r in source)
 
 
 def test_live_and_refined_citations_resolve_to_distinct_records(lecture):
@@ -75,13 +75,13 @@ def test_live_and_refined_citations_resolve_to_distinct_records(lecture):
     journal.render(finished=True)
     root = journal.directory.parent
     assert 'notes.transcript.md#refined-L1' in (root / 'notes.md').read_text()
-    assert 'notes.transcript.md#live-L1' in (root / 'notes.live.md').read_text()
-    transcript = (root / 'notes.transcript.md').read_text()
+    assert 'notes.transcript.md#live-L1' in (root / ATTACHMENT_DIR / 'notes.live.md').read_text()
+    transcript = (root / ATTACHMENT_DIR / 'notes.transcript.md').read_text()
     assert all(r['text'] in transcript for r in source)
     assert '<a id="live-L1">' in transcript and '<a id="refined-L1">' in transcript
     assert 'Corrected English.' in transcript
     assert '实时预览' not in (root / 'notes.md').read_text()
-    assert not (root / 'notes.review.md').exists()
+    assert not (root / ATTACHMENT_DIR / 'notes.review.md').exists()
 
 
 def test_citation_must_be_in_supplied_evidence():
@@ -92,6 +92,23 @@ def test_citation_must_be_in_supplied_evidence():
     assert '#live-L10' in linked_sources(citation, 'notes.transcript.md', 'live')
     with pytest.raises(worker.APIError, match='未提供'):
         worker.validate_content(citation, 10, {5, 6})
+
+
+def test_live_batch_may_repeat_a_citation_from_the_supplied_notes(lecture):
+    # A short closing batch continues the previous sentence, whose note cites L1–L2.
+    # Only the last five source records are resent, so L1 reaches the model via the notes alone.
+    journal, source = lecture
+    journal.save(source[:7], '- 平面同痕的定义 [L1–L2]')
+    assert worker.process_batch(journal, source, lambda *a: '- 承接前文的定义 [L1–L2]，补充结论 [L8]')
+    assert journal.cursor == 8
+
+
+def test_live_batch_still_rejects_a_source_it_was_never_shown(lecture):
+    journal, source = lecture
+    journal.save(source[:7], '- 平面同痕的定义 [L6–L7]')
+    with pytest.raises(worker.APIError, match='未提供'):
+        worker.process_batch(journal, source, lambda *a: '- 凭空引用 [L1]，补充结论 [L8]')
+    assert journal.cursor == 7
 
 
 def test_glossary_keeps_background_out_of_asr_and_rejects_oversized_hints(tmp_path):
@@ -109,28 +126,37 @@ def test_glossary_keeps_background_out_of_asr_and_rejects_oversized_hints(tmp_pa
         load_glossary(tmp_path)
 
 
-def test_structured_section_preserves_escaped_math_and_separates_review():
-    response = json.dumps(dict(body='## 定义\n\n' + r'定义 \(x=1\) [L1]', review='缺图 [L2]'))
+def test_markdown_section_keeps_latex_backslashes_and_separates_review():
+    # These commands begin with JSON escape letters (\f \b \n \t \r) or are invalid escapes (\a).
+    math = r'$$\frac{\beta}{\alpha} \neq \nabla \times \theta \rightarrow \tau$$'
+    response = '## 定义\n\n' + r'定义 \(x=1\) [L1]' + f'\n\n{math}\n<!-- REVIEW -->\n缺图 [L2]'
     parsed = worker.checked_completion([], 'model', 2,
         lambda messages, model, tokens: final_notes.section_response(
             messages, model, tokens, lambda *a: response), 8000)
-    assert '定义 $x=1$ [L1]' in parsed
+    assert '定义 $x=1$ [L1]' in parsed and math in parsed
     assert parsed.startswith('### 定义')
-    assert '\n<!-- REVIEW -->\n缺图 [L2]' in parsed
+    assert parsed.endswith('\n<!-- REVIEW -->\n缺图 [L2]')
 
 
-def test_html_comment_cannot_silently_hide_model_review(lecture):
+@pytest.mark.parametrize('response, hidden', [
+    ('正文 [L1]\n<!-- REVIEW\n疑点 [L2]\n-->', False),   # review written inside the marker
+    ('正文 [L1]\n<!-- 疑点 [L2] -->', True),
+])
+def test_html_comment_cannot_silently_hide_model_review(lecture, response, hidden):
     journal, records = lecture
     def api(messages, model, tokens):
         if tokens == final_notes.PLAN_TOKENS:
             return json.dumps(dict(continues_previous=False, topics=[
                 dict(title='主题', question='内容？', first=1, last=8)]))
-        return '正文 <!-- REVIEW\n疑点\n-->'
+        return response
     final_notes.generate(journal, records, api)
     info = dict(journal.db.execute('SELECT key, value FROM info'))
-    assert info['detail_status'] == 'incomplete'
-    review = (journal.directory.parent / 'notes.review.md').read_text()
-    assert 'body/review' in review
+    review = (journal.directory.parent / ATTACHMENT_DIR / 'notes.review.md').read_text()
+    assert '<!--' not in (journal.directory.parent / 'notes.md').read_text()
+    if hidden:
+        assert info['detail_status'] == 'incomplete' and '隐藏注释' in review
+    else:
+        assert info['detail_status'] == 'complete' and '疑点' in review
 
 
 def test_heading_cannot_hide_drifting_translation_in_prose():
@@ -145,7 +171,7 @@ def test_neighboring_context_does_not_duplicate_owned_review(lecture):
                         '本主题缺图 [L4]\n\n邻接主题不清楚 [L8]')
     journal.save_detail(source[4:], '## 第二主题\n正文 [L5]\n<!-- REVIEW -->\n'
                         '本主题听不清 [L8 00:00:08–00:00:09]')
-    review = (journal.directory.parent / 'notes.review.md').read_text()
+    review = (journal.directory.parent / ATTACHMENT_DIR / 'notes.review.md').read_text()
     assert '本主题缺图' in review and '本主题听不清' in review
     assert '邻接主题不清楚' not in review
     assert review.count('#live-L8') == 1

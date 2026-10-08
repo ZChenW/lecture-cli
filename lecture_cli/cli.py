@@ -25,33 +25,82 @@ from rich.panel import Panel
 from rich.table import Table
 from rich.text import Text
 
-from .storage import Journal, events, final_events, refined_events, read_json, write_json
+from .storage import (ATTACHMENT_DIR, ATTACHMENTS, EMPTY_CAUSES, EMPTY_HINT, EMPTY_TITLE, Journal, no_content, attachment_path, events, final_events,
+                      refined_events, read_json, review_state_path, write_json)
 from .audio_buffer import drain_timeout
 from .asr import QWEN_MODELS, asr_models, resolve_asr_model, capture_python, capture_environment
 from .glossary import load_glossary
+from .providers import notes_label
+from . import runs
+from . import config as settings
+from .input_level import summary as weak_input_summary
+from . import weak_spans
+from .mic_gain import restore_volume, start_volume
+from .refinement import UPLOAD_NOTICE as CLOUD_REFINE_UPLOAD, label as refine_label
 
 console = Console()
 
 
+NO_COURSES_DIR = "尚未设置课程目录，请运行 lecture setup 或 lecture gui"
+CLOUD_REFINE_NO_KEY = ("云端课后校正需要转录 key，请设置 LECTURE_ASR_API_KEY 或写入配置目录的 asr-api-key 文件；"
+                       "也可以加 --no-refine 跳过本次校正")
+FALLBACK_NOTICE = "部分内容未完成笔记服务整理，已作为“待整理原文”保存在笔记中。"
+DETAIL_NOTICE = "详细笔记未全部完成；已完成章节及剩余原文已保存在笔记中。"
+REGISTRY_UNAVAILABLE = "运行登记暂不可用，已跳过更新；笔记不受影响。"
+DISCARDED = "已放弃本次记录：本次笔记、附件与临时文件均已删除。"
+TEMP_SUFFIX = 8  # tempfile.mkstemp's random part in storage.atomic_text names.
+
+
+class Discarded(Exception):
+    """The user discarded the lecture while it was still recording."""
+
+
+def discard_requested(directory: Path) -> bool:
+    # Only honoured while recording; the controller withdraws the sentinel once closing begins.
+    return (directory / "discard").exists() and \
+        read_json(directory / "controller-state.json").get("phase") == "recording"
+
+
+def discard_outputs(output: Path) -> list[str]:
+    """Delete exactly this run's note and attachments; returns paths that could not be removed."""
+    failed = []
+    # Plan GUI-3 item 4: ticks a reader made while the lecture was still recording go too.
+    for path in [output] + [attachment_path(output, kind) for kind in ATTACHMENTS] \
+            + [review_state_path(attachment_path(output, "review"))]:
+        try:
+            names = os.listdir(path.parent)
+        except FileNotFoundError:
+            continue
+        except OSError:
+            failed.append(str(path))
+            continue
+        # An interrupted atomic write leaves ".<exact name>.<8 random chars>" beside its target.
+        prefix = f".{path.name}."
+        for name in names:
+            if name == path.name or (name.startswith(prefix) and len(name) == len(prefix) + TEMP_SUFFIX):
+                try:
+                    (path.parent / name).unlink()
+                except FileNotFoundError:
+                    pass
+                except OSError:
+                    failed.append(str(path.parent / name))
+    return failed
+
+
+# Thin forwards: tests, scripts and completion still import these from cli.
 def config_dir() -> Path:
-    return Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config")) / "lecture-cli"
+    return settings.config_dir()
 
 
 def configuration(load_key=True) -> dict:
-    result = {"courses_dir": str(Path.home() / "Downloads" / "Umass_CS_Class"),
-              "model": "deepseek-flash", "asr_model": "base.en", "language": "en",
-              "interval": 60, "device": None, "asr_device": "auto", "refine": False,
-              "asr_backend": "local", "asr_api_base": "https://api.groq.com/openai/v1",
-              "asr_api_model": "whisper-large-v3-turbo"}
-    result.update(read_json(config_dir() / "config.json"))
+    result = settings.load()
     if load_key:
-        for variable, filename in (("DEEPSEEK_API_KEY", "api-key"),
-                                   ("LECTURE_ASR_API_KEY", "asr-api-key")):
-            if not os.environ.get(variable):
-                key_file = config_dir() / filename
-                if key_file.exists():
-                    os.environ[variable] = key_file.read_text().strip()
+        settings.load_keys()
     return result
+
+
+def save_config(config) -> None:
+    settings.save(config)
 
 
 def reap_stale_sessions() -> None:
@@ -78,10 +127,33 @@ def reap_stale_sessions() -> None:
                     time.sleep(0.05)
                 if any(still_running(pid) for pid in meta.get("children", [])):
                     continue
+                # Plan N3.5: the controller died before it could put the volume back.
+                if notice := restore_volume(meta.get("mic_volume_start"), read_json(directory / "asr-state.json").get("gain_volume")):
+                    console.print("上次录制的麦克风音量：" + notice, markup=False)
+                if discard_requested(directory):
+                    # The controller died while discarding: finish the discard, never recover.
+                    failed = discard_outputs(Path(meta["output"]))
+                    shutil.rmtree(directory)
+                    if failed:
+                        console.print("以下文件未能删除：" + "、".join(failed), style="yellow", markup=False)
+                    else:
+                        console.print(f"已完成上次放弃的记录的清理：{meta['output']}", markup=False)
+                    try:
+                        runs.mark_discarded(meta)
+                    except OSError:
+                        console.print(REGISTRY_UNAVAILABLE, style="yellow", markup=False)
+                    continue
                 preserve_tail(directory)
                 journal = Journal(directory)
                 try:
                     journal.set_info("warning", "上次录制异常中断；已恢复可取得的文字，未识别的音频未保存。")
+                    if weak := weak_input_summary(read_json(directory / "asr-state.json").get("weak_input_seconds")):
+                        journal.add_warning(weak)
+                    if spans := weak_spans.load(directory):
+                        # Plan GUI-4 Q3.4: marked segments are announced with their times, not a total.
+                        journal.add_warning(weak_spans.spans_hint(spans))
+                        if weak:
+                            journal.remove_warning(weak)
                     if meta.get("refine") and refined_events(directory) is None:
                         from .refinement import WARNING
                         journal.add_warning(WARNING)
@@ -92,6 +164,10 @@ def reap_stale_sessions() -> None:
                     journal.close()
                 shutil.rmtree(directory)
                 console.print(f"已恢复上次中断的笔记并清理临时文件：{meta['output']}", markup=False)
+                try:
+                    runs.mark_recovered(meta)
+                except OSError:  # Includes an unreadable record; the note is already saved.
+                    console.print(REGISTRY_UNAVAILABLE, style="yellow", markup=False)
         except BlockingIOError:
             continue  # Another lecture controller is still using this workspace.
         except OSError:
@@ -157,9 +233,11 @@ def display(directory: Path, stage: str = "", worker_dead=False):
     table.add_row("语音模型", Text(meta.get("asr_model", "")))
     if meta.get("refine"):
         table.add_row("课后校正", Text(read_json(directory / "refinement-state.json").get(
-            "status", asr.get("refinement_warning") or "Qwen 1.7B · 下课后自动重转录")))
+            "status", asr.get("refinement_warning") or refine_label(meta))))
     if asr.get("device_notice"):
         table.add_row("设备提示", Text(asr["device_notice"]))
+    if asr.get("gain_notice"):
+        table.add_row("麦克风音量", Text(asr["gain_notice"]))
     level = min(20, int(asr.get("level", 0) * 150))
     table.add_row("输入音量", "▰" * level + "▱" * (20 - level))
     table.add_row("转录积压", f"{asr.get('lag', 0) + asr.get('queued', 0):.1f} 秒")
@@ -167,7 +245,7 @@ def display(directory: Path, stage: str = "", worker_dead=False):
         table.add_row("音频暂存", f"{asr['queued']:.1f} 秒音频等待转录")
     if asr.get("warning"):
         table.add_row("收音提示", Text(asr["warning"]))
-    table.add_row("DeepSeek", Text("进程已退出，结束时保存待整理原文" if worker_dead else notes.get("status", "等待新增转录")))
+    table.add_row(notes_label(meta), Text("进程已退出，结束时保存待整理原文" if worker_dead else notes.get("status", "等待新增转录")))
     table.add_row("待整理内容", f"{max(0, asr.get('count', 0) - notes.get('cursor', 0))} 个来源片段")
     if notes.get("batch_segments"):
         table.add_row("本批合并", f"{notes['batch_segments']} 个片段 · {notes['batch_chars']} 字符")
@@ -225,7 +303,14 @@ def session(args, config: dict, course: Path) -> int:
     output_dir = course / "LectureNotes"
     if output_dir.is_symlink():
         raise ValueError("LectureNotes 不能是指向其他目录的符号链接")
+    created_dirs = [] if output_dir.exists() else [output_dir]
     output_dir.mkdir(exist_ok=True)
+    attachment_dir = output_dir / ATTACHMENT_DIR
+    if attachment_dir.is_symlink():
+        raise ValueError(f"{ATTACHMENT_DIR} 不能是指向其他目录的符号链接")
+    if not attachment_dir.exists():
+        created_dirs.insert(0, attachment_dir)
+    attachment_dir.mkdir(exist_ok=True)
     now = datetime.now().astimezone()
     suffix = "演示笔记" if args.command == "demo" else "课堂笔记"
     output = output_dir / f"{now:%Y-%m-%d_%H%M%S}-{suffix}-{uuid.uuid4().hex[:6]}.md"
@@ -255,9 +340,66 @@ def session(args, config: dict, course: Path) -> int:
     has_fallback = False
     detail_incomplete = False
     refinement_failed = False
+    empty = False  # Plan GUI-4 Q1.2: nothing recognised; the note and the registry say so.
+    refinement_skipped = False
+    discarded = False
+    audio_seconds = None
     persisted = False
+    completed = False
+    warnings = []
+    run_id = None
+    headless = getattr(args, "headless", False)
+    stages = [("录制与转录", time.monotonic())]
+    wall_offset = time.time() - time.monotonic()
+    controller = {"phase": None, "since": None, "paused": None, "can_skip": False}
     owner_lock = (directory / "owner.lock").open("w")
     fcntl.flock(owner_lock, fcntl.LOCK_EX)
+
+    def publish(phase=None):
+        """controller-state.json changes only with the phase or the pause sentinel."""
+        paused = (directory / "pause").exists()
+        if phase is None and paused == controller["paused"]:
+            return
+        if phase:
+            controller.update(phase=phase, since=time.time(), can_skip=phase == "refining")
+        controller["paused"] = paused
+        try:
+            write_json(directory / "controller-state.json", dict(controller, stages=[
+                {"name": name, "start": begin + wall_offset, "end": None if end is None else end + wall_offset}
+                for (name, begin), (_, end) in zip(stages, stages[1:] + [(None, None)]) if name]))
+        except OSError:
+            # Only observers read this file: a full /tmp must never cost the drain or the save.
+            controller["paused"] = None  # Retry on the next tick, in case space frees up.
+        if phase and phase != "recording":
+            # Discarding is only possible while recording; once closing begins a late request is
+            # withdrawn (after the new phase is visible, so a racing request cannot outlive it).
+            with contextlib.suppress(OSError):
+                (directory / "discard").unlink(missing_ok=True)
+
+    def finish_run(identifier, kept):
+        from .refinement import WARNING, SKIPPED
+        marks = stages if not stages[-1][0] else stages + [("", time.monotonic())]
+        notices = warnings + [text for flag, text in ((refinement_failed, WARNING), (refinement_skipped, SKIPPED),
+                                                      (has_fallback, FALLBACK_NOTICE),
+                                                      (detail_incomplete, DETAIL_NOTICE)) if flag]
+        status = "discarded" if discarded else "unsaved" if kept else "done" if completed else "failed"
+        try:
+            runs.update(identifier, status=status,
+                        # An exception (including a failed save) leaves session() and main() returns 1.
+                        exit_code=rc if (completed or discarded) and not kept else 1, finished=runs.now(),
+                        stages=[{"name": name, "seconds": round(end - begin, 1)}
+                                for (name, begin), (_, end) in zip(marks, marks[1:])],
+                        flags={"refinement_failed": refinement_failed, "refinement_skipped": refinement_skipped,
+                               "has_fallback": has_fallback, "detail_incomplete": detail_incomplete,
+                               "empty": empty},
+                        audio_seconds=audio_seconds, warnings=notices, workspace_kept=kept)
+        except OSError:  # Includes runs.Unavailable: a corrupt record must not change the exit code.
+            console.print(REGISTRY_UNAVAILABLE, style="yellow", markup=False)
+
+    def show(stage="", worker_dead=False):
+        # Headless mode never builds the terminal view.
+        if live is not None:
+            live.update(display(directory, stage, worker_dead=worker_dead), refresh=True)
 
     def request_stop(signum, frame):
         nonlocal stop_requested, stop_requests
@@ -272,22 +414,34 @@ def session(args, config: dict, course: Path) -> int:
         python = sys.executable
         if role == "_capture" and meta.get("asr_backend") != "api":
             env = capture_environment(meta["asr_model"], env)
-            python = capture_python(meta["asr_model"])
+            python = capture_python(meta["asr_model"], meta.get("qwen_python"))
+        elif role == "_refine" and meta.get("refine_backend") == "api":
+            pass  # Plan N4: cloud refinement runs on this interpreter and loads no Qwen.
         elif role == "_refine":
-            from .refinement import MODEL
-            env = capture_environment(MODEL, env)
+            env = capture_environment(meta["refine_model"], env)
             env["HF_HUB_OFFLINE"] = "1"
-            python = capture_python(MODEL)
+            python = capture_python(meta["refine_model"], meta.get("qwen_python"))
         if role != "_capture" or meta.get("asr_backend") != "api":
             env.pop("LECTURE_ASR_API_KEY", None)
+        if role == "_refine" and meta.get("refine_backend") == "api" and os.environ.get("LECTURE_ASR_API_KEY"):
+            env["LECTURE_ASR_API_KEY"] = os.environ["LECTURE_ASR_API_KEY"]  # Plan N4: the transcription key, to this child only.
         if role != "_worker":
+            env.pop("LECTURE_NOTES_API_KEY", None)
             env.pop("DEEPSEEK_API_KEY", None)
         return subprocess.Popen([python, "-m", "lecture_cli", role, str(directory)],
                                 stdin=subprocess.DEVNULL, stdout=log, stderr=log,
                                 start_new_session=True, env=env)
 
     try:
+        # Plan N3.5: remember the volume auto-gain may change, to put it back when the run ends.
+        meta["mic_volume_start"] = start_volume(meta)
         write_json(directory / "session.json", meta)
+        publish("starting")
+        try:
+            run_id = runs.begin(meta, directory)
+        except OSError as exc:
+            # Recording does not depend on the registry; only outside observers do.
+            console.print(f"无法写入运行登记（{exc.strerror or exc}），录制照常。", style="yellow", markup=False)
         journal = Journal(directory)
         journal.render()
         journal.close()
@@ -297,22 +451,31 @@ def session(args, config: dict, course: Path) -> int:
         capture = spawn("_demo" if args.command == "demo" else "_capture")
         meta["children"] = [capture.pid, worker.pid]
         write_json(directory / "session.json", meta)
+        publish("recording")
         console.print(f"笔记将保存到：{output}", markup=False)
-        with keyboard() as key, Live(display(directory), console=console, refresh_per_second=4,
-                                     auto_refresh=False, transient=not console.is_terminal) as live:
-            while capture.poll() is None and not stop_requested:
+        with (contextlib.nullcontext(lambda: "") if headless else keyboard()) as key, \
+                (contextlib.nullcontext() if headless else
+                 Live(display(directory), console=console, refresh_per_second=4,
+                      auto_refresh=False, transient=not console.is_terminal)) as live:
+            # An outside process (the GUI) ends the lecture by creating the stop sentinel.
+            while capture.poll() is None and not stop_requested and not (directory / "stop").exists():
+                if (directory / "discard").exists():  # This loop is the recording phase.
+                    raise Discarded
                 pressed = key()
                 if pressed == "q":
                     request_stop(None, None)
                 elif pressed == "p":
                     pause = directory / "pause"
                     pause.unlink() if pause.exists() else pause.touch()
-                live.update(display(directory, worker_dead=worker.poll() is not None), refresh=True)
+                publish()
+                show(worker_dead=worker.poll() is not None)
                 time.sleep(0.2)
             (directory / "stop").touch()
+            publish("draining")
             deadline = time.monotonic() + drain_timeout(read_json(directory / "asr-state.json")) + 20
             while capture.poll() is None and time.monotonic() < deadline:
-                live.update(display(directory, "正在完成末尾转录…"), refresh=True)
+                publish()
+                show("正在完成末尾转录…")
                 time.sleep(0.2)
             if capture.poll() is None:
                 capture.kill()
@@ -330,7 +493,9 @@ def session(args, config: dict, course: Path) -> int:
             # Keep the notes worker on live batches until offline source is
             # atomically ready. The capture child has exited and freed its GPU.
             if meta["refine"]:
-                from .refinement import timeout_seconds, WARNING
+                from .refinement import timeout_seconds, WARNING, SKIPPED
+                stages.append(("离线校正", time.monotonic()))
+                publish("refining")
                 if capture.returncode == 0:
                     refinement = spawn("_refine")
                     meta["children"].append(refinement.pid)
@@ -339,11 +504,14 @@ def session(args, config: dict, course: Path) -> int:
                     initial_stop_requests = stop_requests
                     cancelled = False
                     while refinement.poll() is None and time.monotonic() < deadline:
-                        if key() == "q" or stop_requests > initial_stop_requests:
+                        if (key() == "q" or stop_requests > initial_stop_requests
+                                or (directory / "skip-refine").exists()):
                             cancelled = True
                             break
-                        live.update(display(directory, "课后离线校正中 · Q / Ctrl+C 跳过并保存实时记录"), refresh=True)
+                        publish()
+                        show("课后离线校正中 · Q / Ctrl+C 跳过并保存实时记录")
                         time.sleep(0.2)
+                    refinement_skipped = cancelled
                     if refinement.poll() is None:
                         state = read_json(directory / "refinement-state.json")
                         state.update(complete=False, stage=state.get("status", "离线校正"),
@@ -359,20 +527,28 @@ def session(args, config: dict, course: Path) -> int:
                         state = read_json(directory / "refinement-state.json")
                         if not state.get("reason"):
                             state["reason"] = f"离线进程退出，退出码 {refinement.returncode}"
-                        state.update(status=WARNING, complete=False)
+                        # The notes worker reads "skipped" to word its notice as a skip, not a failure.
+                        state.update(status=SKIPPED if cancelled else WARNING, complete=False, skipped=cancelled)
                         write_json(directory / "refinement-state.json", state)
                 else:
                     write_json(directory / "refinement-state.json", {
                         "status": WARNING, "complete": False, "stage": "录音收尾",
                         "reason": "录音进程异常退出，未启动离线校正"})
             (directory / "capture.done").touch()
+            stages.append(("课后笔记", time.monotonic()))
+            publish("finalizing")
             from .final_notes import finish_timeout
             deadline = time.monotonic() + finish_timeout(events(directory), read_json(directory / "notes-state.json").get("cursor", 0))
             if meta["refine"]:
                 deadline += finish_timeout(final_events(directory), 0)
             while worker.poll() is None and time.monotonic() < deadline:
-                live.update(display(directory, "正在保存最后的笔记…"), refresh=True)
+                publish()
+                show("正在保存最后的笔记…")
                 time.sleep(0.2)
+            stages.append(("", time.monotonic()))
+        completed = True
+    except Discarded:
+        discarded = True
     finally:
         # Stop children before deleting their workspace. Also covers Ctrl+C/TERM/HUP and exceptions.
         for process in (capture, refinement, worker):
@@ -383,20 +559,41 @@ def session(args, config: dict, course: Path) -> int:
                 except subprocess.TimeoutExpired:
                     process.kill()
                     process.wait()
+        # Normal end and discard alike; capture has stopped, so nothing changes the volume any more.
+        if notice := restore_volume(meta.get("mic_volume_start"), read_json(directory / "asr-state.json").get("gain_volume")):
+            console.print("麦克风音量：" + notice, markup=False)
         try:
-            if (directory / "session.json").exists():
+            if (directory / "session.json").exists() and not discarded:
+                publish("saving")
                 preserve_tail(directory)
                 journal = Journal(directory)
                 try:
                     state = read_json(directory / "asr-state.json")
+                    if state.get("gain_notice"):
+                        console.print("麦克风音量：" + state["gain_notice"], markup=False)
+                    audio = state.get("captured", state.get("seconds"))
+                    if isinstance(audio, (int, float)) and not isinstance(audio, bool):
+                        audio_seconds = round(audio, 1)
                     if state.get("error") or state.get("warning"):
                         warning = " ".join(filter(None, [state.get("error"), state.get("warning")]))
                         journal.add_warning(warning)
+                        warnings.append(warning)
                         console.print(warning, style="yellow", markup=False)
+                    if weak := weak_input_summary(state.get("weak_input_seconds")):
+                        journal.add_warning(weak)  # Plan N3.4: one sentence, only past two minutes.
+                    if spans := weak_spans.load(directory):
+                        # Plan GUI-4 Q3.4: marked segments are announced with their times, not a total.
+                        journal.add_warning(weak_spans.spans_hint(spans))
+                        if weak:
+                            journal.remove_warning(weak)
                     if meta["refine"] and refined_events(directory) is None:
-                        from .refinement import WARNING
-                        journal.add_warning(WARNING)
-                        refinement_failed = True
+                        from .refinement import WARNING, SKIPPED
+                        # A user skip is not a failure; the notes say which one happened.
+                        journal.add_warning(SKIPPED if refinement_skipped else WARNING)
+                        refinement_failed = not refinement_skipped
+                    if no_content(directory):
+                        empty = True
+                        journal.set_info("empty", "yes")
                     journal.fallback()
                     journal.preserve_detail_tail()
                     journal.render(finished=True)
@@ -408,43 +605,94 @@ def session(args, config: dict, course: Path) -> int:
         finally:
             for log in logs:
                 log.close()
+            kept = None
             try:
-                if persisted or not (directory / "session.json").exists():
+                if discarded:
+                    failed = discard_outputs(output)
+                    for folder in created_dirs:
+                        with contextlib.suppress(OSError):
+                            folder.rmdir()  # Only when empty: other notes may have arrived meanwhile.
+                    if failed:
+                        rc = 1
+                        warnings.append("以下文件未能删除：" + "、".join(failed))
+                        console.print(warnings[-1], style="yellow", markup=False)
+                    shutil.rmtree(directory)
+                elif persisted or not (directory / "session.json").exists():
                     shutil.rmtree(directory)
                 else:
+                    kept = str(directory)
                     console.print(f"笔记尚未成功保存，暂存于 {directory}；恢复目标目录可写后再运行 lecture，即可恢复并清理。", style="yellow", markup=False)
             finally:
+                # Before the lock is released, so a recovering command's "recovered" is never overwritten.
+                if run_id:
+                    finish_run(run_id, kept)
                 owner_lock.close()
                 for sig, handler in handlers.items():
                     signal.signal(sig, handler)
+    if discarded:
+        if not rc:
+            console.print(DISCARDED, markup=False)
+        return rc
     console.print(f"已保存：{output}\n本次 /tmp 中间文件已清理。", markup=False)
+    if not stages[-1][0]:
+        console.print("耗时：" + " · ".join(
+            f"{name} {int(end - begin) // 60}:{int(end - begin) % 60:02}"
+            for (name, begin), (_, end) in zip(stages, stages[1:])), markup=False)
     if refinement_failed:
         from .refinement import WARNING
         console.print(WARNING, style="yellow", markup=False)
+    if refinement_skipped:
+        from .refinement import SKIPPED
+        console.print(SKIPPED, markup=False)
     if has_fallback:
-        console.print("部分内容未完成 DeepSeek 整理，已作为“待整理原文”保存在笔记中。", style="yellow")
+        console.print(FALLBACK_NOTICE, style="yellow")
     if detail_incomplete:
-        console.print("详细笔记未全部完成；已完成章节及剩余原文已保存在笔记中。", style="yellow")
+        console.print(DETAIL_NOTICE, style="yellow")
+    if empty:
+        console.print(f"{EMPTY_TITLE}。可能的原因：{'、'.join(EMPTY_CAUSES)}。{EMPTY_HINT}", style="yellow", markup=False)
     return rc
 
 
 def setup(config):
     if not sys.stdin.isatty():
         raise ValueError("setup 需要交互终端")
-    root = console.input(f"课程目录 [{config['courses_dir']}]：", markup=False).strip()
+    current = config.get("courses_dir")
+    # Without a saved folder there is no sensible default to offer; the user must type one.
+    root = console.input(f"课程目录 [{current}]：" if current else "课程目录：", markup=False).strip()
     if root:
         config["courses_dir"] = str(Path(root).expanduser().resolve())
+    elif not current:
+        raise ValueError("必须输入课程目录")
     course_paths(Path(config["courses_dir"]))
     config["asr_model"] = choose_asr_model(config.get("asr_model", "base.en"))
     devices()
     answer = console.input("麦克风编号或名称 [系统默认]：", markup=False).strip()
     config["device"] = int(answer) if answer.isdigit() else answer or None
-    key = getpass.getpass("DeepSeek API key（留空保留现有配置）：").strip()
+    key = getpass.getpass("笔记服务 API key（留空保留现有配置）：").strip()
     save_config(config)
     if key:
-        from .storage import atomic_text
-        atomic_text(config_dir() / "api-key", key + "\n")
+        settings.write_key("notes", key)
     console.print("配置已保存。运行 lecture start 选择课程并开始。")
+
+
+def live_model_line(args, config: dict, course: str) -> str:
+    """Apply the course's remembered live model when no --asr-model was given; say where it came from."""
+    if config["asr_backend"] == "api":
+        source = "命令行 --asr-api-model 指定" if args.asr_api_model is not None else "默认设置"
+        return f"本次实时转录：云端 {config['asr_api_model']}（{source}）"
+    if args.asr_model is not None:
+        return f"本次实时转录模型：{config['asr_model']}（命令行 --asr-model 指定）"
+    remembered = settings.course_asr_model(config, course)
+    if remembered:
+        try:
+            model = resolve_asr_model(remembered)
+            capture_python(model, config.get("qwen_python"))
+        except ValueError as exc:
+            # The lecture still starts: an uninstalled Qwen must not cost a class.
+            return f"本次实时转录模型：{config['asr_model']}（默认设置；课程 {course} 记住的 {remembered} 不可用：{exc}）"
+        config["asr_model"] = model
+        return f"本次实时转录模型：{model}（课程 {course} 记住的选择）"
+    return f"本次实时转录模型：{config['asr_model']}（默认设置）"
 
 
 def choose_asr_model(current: str) -> str:
@@ -509,12 +757,6 @@ def _curses_model_menu(stdscr, names: tuple[str, ...], index: int, current: str)
         # Ignore ESC and other CSI leftovers; keypad() already maps real arrows.
 
 
-def save_config(config) -> None:
-    directory = config_dir()
-    directory.mkdir(parents=True, exist_ok=True, mode=0o700)
-    write_json(directory / "config.json", config)
-
-
 def devices():
     import sounddevice as sd
     for i, device in enumerate(sd.query_devices()):
@@ -522,45 +764,28 @@ def devices():
             console.print(f"{i:>3}  {device['name']}", markup=False)
 
 
-def doctor(config):
-    import importlib.util
-    checks = {"课程目录": Path(config["courses_dir"]).is_dir(),
-              "DeepSeek key": bool(os.environ.get("DEEPSEEK_API_KEY")),
-              "FFmpeg": bool(shutil.which("ffmpeg"))}
-    if config.get("asr_backend") == "api":
-        import httpx
-        from .api_capture import API_TIMEOUT
-        checks["转录 key"] = bool(os.environ.get("LECTURE_ASR_API_KEY"))
-        checks["转录服务"] = False
-        if checks["转录 key"]:
-            try:
-                with httpx.Client(timeout=API_TIMEOUT) as client:
-                    response = client.get(config["asr_api_base"].rstrip("/") + "/models",
-                                          headers={"Authorization": "Bearer " + os.environ["LECTURE_ASR_API_KEY"]})
-                checks["转录服务"] = response.status_code == 200
-            except httpx.RequestError:
-                pass
-    else:
-        checks["WhisperLiveKit"] = importlib.util.find_spec("whisperlivekit") is not None
+def doctor(config, mic_test=False, mic_stream=None):
+    from .checks import run_checks
+    results = run_checks(config)
+    for item in results:
+        console.print(f"{'✓' if item.level == 'ok' else '✗'} {item.label}"
+                      + (f"：{item.detail}" if item.detail else ""), markup=False)
+        if item.hint:
+            console.print(f"  建议：{item.hint}", markup=False)
+    failed = any(item.level == "fail" for item in results)
+    if mic_test:
+        # Plan GUI-4 Q1.5: only with --mic-test does doctor open the microphone, for 5 s, levels only.
+        from . import mic_check
+        console.print(f"麦克风测试：请在接下来 {mic_check.TEST_SECONDS} 秒内正常说几句话…", markup=False)
         try:
-            probe = subprocess.run([capture_python(config["asr_model"]), "-m", "lecture_cli.asr", config.get("asr_device", "auto"), config["asr_model"]],
-                                   env=capture_environment(config["asr_model"]), capture_output=True, text=True, timeout=30)
-            result = json.loads(probe.stdout)
-            checks["识别设备检查"] = probe.returncode == 0
-            precision = "BF16" if config["asr_model"] in QWEN_MODELS else "FP16"
-            console.print("识别设备：" + (f"NVIDIA GPU · {precision}" if result.get("device") == "cuda" else
-                                         result.get("error") or result.get("notice") or "CPU"), markup=False)
-        except (OSError, ValueError, subprocess.TimeoutExpired):
-            checks["识别设备检查"] = False
-    try:
-        import sounddevice as sd
-        sd.check_input_settings(device=config.get("device"), channels=1, samplerate=16000)
-        checks["麦克风格式（未开始录音）"] = True
-    except Exception:
-        checks["麦克风格式（未开始录音）"] = False
-    for label, ok in checks.items():
-        console.print(f"{'✓' if ok else '✗'} {label}", markup=False)
-    return 0 if all(checks.values()) else 1
+            result = mic_check.run_test(config.get("device"), factory=mic_stream)
+        except Exception as exc:  # PortAudio missing, device gone or busy.
+            console.print(f"✗ 无法打开麦克风：{exc}", markup=False)
+            return 1
+        for line in mic_check.describe(result):
+            console.print(line, markup=False)
+        failed = failed or not result["passed"]
+    return 1 if failed else 0
 
 
 def main(argv=None):
@@ -579,7 +804,10 @@ def main(argv=None):
         return 0
     if argv and argv[0] == "_complete-courses":
         # Completion must never recover sessions, read credentials or open audio hardware.
-        root = Path(argv[1]).expanduser() if len(argv) > 1 else Path(configuration(load_key=False)["courses_dir"]).expanduser()
+        saved = configuration(load_key=False).get("courses_dir")
+        if len(argv) < 2 and not saved:
+            return 0
+        root = Path(argv[1] if len(argv) > 1 else saved).expanduser()
         try:
             for path in course_paths(root):
                 if not any(c in path.name for c in "\n\r\t"):
@@ -608,7 +836,7 @@ def main(argv=None):
         else:
             run = demo_capture
         return run(directory)
-    parser = argparse.ArgumentParser(prog="lecture", description="课堂转录与 DeepSeek 中文笔记")
+    parser = argparse.ArgumentParser(prog="lecture", description="课堂转录与中文笔记")
     parser.add_argument("--courses-dir", help="覆盖课程根目录")
     subs = parser.add_subparsers(dest="command")
     for name, help_text in [("courses", "列出课程"), ("models", "选择并保存默认语音模型"),
@@ -616,26 +844,35 @@ def main(argv=None):
                             ("devices", "列出麦克风"), ("doctor", "检查环境，不录音"),
                             ("prepare", "提前下载语音模型"), ("start", "选择课程并录制"),
                             ("diagnose-asr", "录制同一段音频并对比两个语音模型"),
-                            ("demo", "用自造文字演示笔记生成，不录音")]:
+                            ("demo", "用自造文字演示笔记生成，不录音"), ("gui", "打开图形界面")]:
         sub = subs.add_parser(name, help=help_text)
         if name in ("start", "demo"):
             sub.add_argument("course", nargs="?")
+            sub.add_argument("--headless", action="store_true",
+                             help="不使用终端界面运行，通过会话目录的哨兵文件控制；需指定课程名")
             sub.add_argument("--interval", type=float, help="笔记检查间隔，默认 60 秒")
             sub.add_argument("--context", help="笔记背景文本（最多 12000 字符）；ASR 使用课程 glossary.json")
         if name in ("start", "prepare", "doctor"):
             sub.add_argument("--asr-model", metavar="NAME",
                              help="语音模型（lecture models 查看全部），覆盖已保存的默认值")
+        if name == "doctor":
+            sub.add_argument("--mic-test", action="store_true",
+                             help="另外录 5 秒测试麦克风（只看电平，不保存音频）；不加时不录音")
         if name in ("start", "doctor"):
             sub.add_argument("--asr-backend", choices=["local", "api"], help="采集后端，默认 local")
             sub.add_argument("--asr-device", choices=["auto", "cuda", "cpu"], help="识别设备，默认 auto 优先 GPU")
         if name == "start":
             sub.add_argument("--asr-api-model", metavar="NAME", help="云端转录模型，仅影响本次运行")
             sub.add_argument("--refine", action=argparse.BooleanOptionalAction, default=None,
-                             help="下课后用 Qwen 1.7B 重转录；临时保存音频，完成后删除")
+                             help="下课后重新转录（配置 refine_backend：local 本机 Qwen，api 云端）；临时保存音频，完成后删除")
+            sub.add_argument("--auto-gain", action=argparse.BooleanOptionalAction, default=None,
+                             help="自动调节 PipeWire 默认麦克风音量（削波时调低、偏弱时调回），默认启用")
             sub.add_argument("--device", help="麦克风编号或名称")
             sub.add_argument("--language", help="课堂语言，默认 en")
             sub.add_argument("--audio-file", help="使用已有音频代替麦克风")
             sub.add_argument("--fast", action="store_true", help="尽快处理已有音频")
+        if name == "gui":
+            sub.add_argument("--no-window", action="store_true", help="只启动本机界面服务并打印地址")
         if name == "diagnose-asr":
             from .asr_diagnostics import DEFAULT_MODELS
             sub.add_argument("course", nargs="?")
@@ -653,30 +890,38 @@ def main(argv=None):
     if not args.command:
         parser.print_help()
         return 0
+    if args.command == "gui":
+        # Before configuration checks: the GUI is where a broken configuration gets fixed.
+        from .gui.launch import run as gui
+        return gui(no_window=args.no_window)
     config = configuration(load_key=args.command != "diagnose-asr")
     reap_stale_sessions()
-    for field in ("courses_dir", "asr_model", "asr_device", "interval", "device", "language", "refine", "asr_backend", "asr_api_model"):
+    for field in ("courses_dir", "asr_model", "asr_device", "interval", "device", "language", "refine", "auto_gain", "asr_backend", "asr_api_model"):
         if getattr(args, field, None) is not None:
             config[field] = getattr(args, field)
     if isinstance(config["device"], str) and config["device"].isdigit():
         config["device"] = int(config["device"])
-    root = Path(config["courses_dir"]).expanduser().resolve()
-    config["courses_dir"] = str(root)
+    root = None
+    if config["courses_dir"]:
+        root = Path(config["courses_dir"]).expanduser().resolve()
+        config["courses_dir"] = str(root)
+
+    def courses_root() -> Path:
+        if root is None:
+            raise ValueError(NO_COURSES_DIR)
+        return root
+
     try:
-        if not 1 <= config["interval"] <= 3600:
-            raise ValueError("间隔必须在 1–3600 秒之间")
-        if config["asr_backend"] not in ("local", "api"):
-            raise ValueError("采集后端必须为 local 或 api")
-        if config["asr_backend"] == "api" and (
-                not isinstance(config["asr_api_base"], str) or
-                not config["asr_api_base"].startswith(("https://", "http://")) or
-                not isinstance(config["asr_api_model"], str) or not config["asr_api_model"].strip()):
-            raise ValueError("云端转录须配置 HTTP(S) 地址和非空模型名称")
+        # The courses folder is checked by the commands that need it, so setup can still fix it.
+        # Opener choices and remembered course settings only concern the GUI; they never block a lecture.
+        problems = [p for p in settings.validate(config) if p.field not in settings.GUI_ONLY]
+        if problems:
+            raise ValueError(problems[0].message)
         if args.command == "prepare" or (args.command in ("start", "doctor", "demo")
                                          and config["asr_backend"] == "local"):
             config["asr_model"] = resolve_asr_model(config["asr_model"])
         if args.command == "courses":
-            for p in course_paths(root):
+            for p in course_paths(courses_root()):
                 console.print(p.name, markup=False)
         elif args.command == "models":
             if not sys.stdin.isatty():
@@ -693,7 +938,7 @@ def main(argv=None):
         elif args.command == "setup":
             setup(config)
         elif args.command == "doctor":
-            return doctor(config)
+            return doctor(config, mic_test=args.mic_test)
         elif args.command == "prepare":
             console.print(f"下载模型：{config['asr_model']}", markup=False)
             if config["asr_model"] in QWEN_MODELS:
@@ -710,7 +955,7 @@ def main(argv=None):
             context = ""
             if args.context:
                 context = Path(args.context).expanduser().read_text()
-            course = select_course(root, args.course)
+            course = select_course(courses_root(), args.course)
             if not args.audio_file:
                 console.print(f"将从麦克风录制 {args.seconds} 秒；Ctrl+C 可取消。", markup=False)
             result = run_diagnostic(
@@ -730,20 +975,35 @@ def main(argv=None):
                 console.print("原始诊断音频已从 /tmp 自动删除。", markup=False)
             return 0 if result["ok"] else 1
         else:
+            courses_root()
+            if args.headless and not args.course:
+                raise ValueError("无头模式需要指定课程名")
             if args.command == "start" and config["asr_backend"] == "api":
                 config["refine"] = False
                 if not os.environ.get("LECTURE_ASR_API_KEY"):
                     raise ValueError("缺少转录 key，请设置 LECTURE_ASR_API_KEY 或写入配置目录的 asr-api-key 文件")
             if args.command == "start" and config["asr_backend"] == "local":
-                capture_python(config["asr_model"])
-                if config.get("refine"):
-                    from .refinement import MODEL
-                    capture_python(MODEL)
-                if config["asr_model"] in QWEN_MODELS and config["language"] == "auto":
-                    raise ValueError("Qwen 流式识别需要 --language en 或 zh")
-            if not os.environ.get("DEEPSEEK_API_KEY"):
-                raise ValueError("缺少 DeepSeek key，请先运行 lecture setup 或设置 DEEPSEEK_API_KEY")
-            return session(args, config, select_course(root, args.course))
+                capture_python(config["asr_model"], config.get("qwen_python"))
+                if config.get("refine") and config.get("refine_backend") != "api":
+                    capture_python(config["refine_model"], config.get("qwen_python"))
+                elif config.get("refine") and not os.environ.get("LECTURE_ASR_API_KEY"):
+                    raise ValueError(CLOUD_REFINE_NO_KEY)
+            if not os.environ.get("LECTURE_NOTES_API_KEY"):
+                raise ValueError("缺少笔记服务 key，请先运行 lecture setup 或设置 LECTURE_NOTES_API_KEY")
+            course = select_course(root, args.course)
+            # --language wins, then the language remembered for this course, then the global default.
+            if args.command == "start" and args.language is None:
+                config["language"] = settings.course_language(config, course.name) or config["language"]
+            if args.command == "start":
+                # Plan N3.1: --asr-model wins, then the live model remembered for this course, then the default.
+                console.print(live_model_line(args, config, course.name), markup=False, soft_wrap=True)
+                if config.get("refine") and config["asr_backend"] == "local" and config.get("refine_backend") == "api":
+                    console.print(f"课后校正：云端 {config['refine_api_model']}（{CLOUD_REFINE_UPLOAD}）",
+                                  markup=False, soft_wrap=True)
+            if args.command == "start" and config["asr_backend"] == "local" and \
+                    config["asr_model"] in QWEN_MODELS and config["language"] == "auto":
+                raise ValueError("Qwen 流式识别需要 --language en 或 zh")
+            return session(args, config, course)
         return 0
     except (ValueError, OSError) as exc:
         console.print(f"错误：{exc}", style="red", markup=False)

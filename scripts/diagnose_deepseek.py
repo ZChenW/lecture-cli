@@ -30,11 +30,11 @@ def main():
     parser.add_argument('--mode', choices=('all', 'models', 'nonstream', 'stream'), default='all')
     args = parser.parse_args()
     config = configuration()
-    key = os.environ.get('DEEPSEEK_API_KEY', '')
+    key = os.environ.get('LECTURE_NOTES_API_KEY', '')
     if args.worker_pid:
         raw = Path(f'/proc/{args.worker_pid}/environ').read_bytes()
         worker_env = dict(entry.split(b'=', 1) for entry in raw.split(b'\0') if b'=' in entry)
-        active_key = worker_env.get(b'DEEPSEEK_API_KEY', b'').decode()
+        active_key = worker_env.get(b'LECTURE_NOTES_API_KEY', b'').decode()
         emit(active_key_matches_config=active_key == key)
         key = active_key or key
         for name in ('HTTP_PROXY', 'HTTPS_PROXY', 'ALL_PROXY', 'http_proxy', 'https_proxy', 'all_proxy', 'NO_PROXY', 'no_proxy'):
@@ -59,9 +59,9 @@ def main():
                 if mode == 'models':
                     response = client.get('https://api.deepseek.com/models', headers=headers)
                     emit(mode=mode, http=response.status_code, elapsed=round(time.monotonic()-began, 2),
-                         selected_model_listed=any(item.get('id') == config['model'] for item in response.json().get('data', [])))
+                         selected_model_listed=any(item.get('id') == config['notes_model'] for item in response.json().get('data', [])))
                     continue
-                body = dict(model=config['model'], messages=[dict(role='user', content='Reply only with OK.')],
+                body = dict(model=config['notes_model'], messages=[dict(role='user', content='Reply only with OK.')],
                             max_tokens=16, thinking={'type': 'disabled'}, stream=mode == 'stream')
                 with client.stream('POST', 'https://api.deepseek.com/chat/completions', headers=headers, json=body) as response:
                     emit(mode=mode, phase='headers', http=response.status_code, elapsed=round(time.monotonic()-began, 2),

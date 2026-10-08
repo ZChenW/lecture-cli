@@ -126,6 +126,7 @@ def transcribe_audio(audio: Path, model: str, *, language: str, asr_device: str,
             "fast": fast,
         })
         env = capture_environment(model)
+        env.pop("LECTURE_NOTES_API_KEY", None)
         env.pop("DEEPSEEK_API_KEY", None)
         env["OMP_NUM_THREADS"] = "4"
         command = [

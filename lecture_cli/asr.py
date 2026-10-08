@@ -46,9 +46,16 @@ def resolve_asr_model(name: str) -> str:
     return name
 
 
-def capture_python(model: str) -> str:
+def capture_python(model: str, configured: str | None = None) -> str:
+    """Qwen runs in its own environment: config qwen_python, then LECTURE_QWEN_PYTHON, then the repo's."""
     if model not in QWEN_MODELS:
         return sys.executable
+    chosen = configured or os.environ.get("LECTURE_QWEN_PYTHON")
+    if chosen:
+        path = Path(chosen).expanduser()
+        if not path.is_file():
+            raise ValueError(f"找不到 Qwen 运行环境的 Python：{path}")
+        return str(path)
     path = Path(__file__).resolve().parents[1] / ".venv-qwen" / "bin" / "python"
     if not path.is_file():
         raise ValueError("Qwen 运行环境未安装，请运行 ./install-qwen.sh")

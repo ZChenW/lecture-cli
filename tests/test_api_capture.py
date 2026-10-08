@@ -197,7 +197,8 @@ def test_audio_file_end_to_end_with_mock_service(tmp_path):
     state = read_json(tmp_path / "asr-state.json")
     assert state["status"] == "转录完成"
     assert state["seconds"] == state["captured"] == 61
-    assert state["queued"] == state["lag"] == 0
+    # lag is a float difference of second counts; it can end at 7e-15 rather than 0.
+    assert state["queued"] == 0 and state["lag"] == pytest.approx(0, abs=1e-6)
     assert state["pending"] == state["buffer"] == ""
     assert state["count"] == 3 and state["asr_device"] == "api"
     assert not (tmp_path / "refinement.pcm").exists()
@@ -275,7 +276,7 @@ def test_configuration_key_precedence_and_no_key_completion(tmp_path, monkeypatc
     assert os.environ["LECTURE_ASR_API_KEY"] == "file-asr-key"
 
 
-def test_api_start_and_spawn_isolate_keys_and_skip_local_imports(tmp_path, monkeypatch):
+def test_api_start_and_spawn_isolate_keys_and_skip_local_imports(tmp_path, monkeypatch, capsys):
     course = tmp_path / "courses" / "MATH421"
     course.mkdir(parents=True)
     calls = {}
@@ -302,7 +303,8 @@ def test_api_start_and_spawn_isolate_keys_and_skip_local_imports(tmp_path, monke
         assert "fake-asr-key" not in json.dumps(meta)
         if role == "_capture":
             Transcript(directory).append("Cloud source.", 0, 1)
-            write_json(directory / "asr-state.json", {"status": "转录完成", "asr_device": "api"})
+            write_json(directory / "asr-state.json", {"status": "转录完成", "asr_device": "api",
+                       "gain_notice": "检测到削波，麦克风音量 85% → 54%"})
         return Process()
     monkeypatch.setattr(cli.subprocess, "Popen", spawn)
     assert cli.main(["--courses-dir", str(course.parent), "start", "MATH421", "--asr-backend", "api",
@@ -311,10 +313,12 @@ def test_api_start_and_spawn_isolate_keys_and_skip_local_imports(tmp_path, monke
     capture_command, capture_env = calls["_capture"]
     assert capture_command[0] == sys.executable
     assert capture_env["LECTURE_ASR_API_KEY"] == "fake-asr-key"
-    assert "DEEPSEEK_API_KEY" not in capture_env
+    assert "DEEPSEEK_API_KEY" not in capture_env and "LECTURE_NOTES_API_KEY" not in capture_env
     assert calls["_worker"][1]["DEEPSEEK_API_KEY"] == "fake-notes-key"
+    assert calls["_worker"][1]["LECTURE_NOTES_API_KEY"] == "fake-notes-key"
     assert "LECTURE_ASR_API_KEY" not in calls["_worker"][1]
     assert not (tmp_path / "config" / "lecture-cli" / "config.json").exists()
+    assert "麦克风音量：检测到削波，麦克风音量 85% → 54%" in capsys.readouterr().out
 
 
 @pytest.mark.parametrize("problem", ["key", "context"])
@@ -355,7 +359,7 @@ def test_capture_role_routes_to_api_module(tmp_path, monkeypatch):
     assert cli.main(["_capture", str(tmp_path)]) == 17
 
 
-def test_api_doctor_skips_local_probe(tmp_path, monkeypatch, capsys):
+def test_api_doctor_skips_local_probe(tmp_path, monkeypatch, capsys, fake_wpctl):
     config = cli.configuration()
     config.update(courses_dir=str(tmp_path), asr_backend="api")
     monkeypatch.setattr(cli, "capture_python", lambda *_: pytest.fail("local probe"))
@@ -363,13 +367,22 @@ def test_api_doctor_skips_local_probe(tmp_path, monkeypatch, capsys):
     monkeypatch.setitem(sys.modules, "sounddevice", SimpleNamespace(check_input_settings=lambda **kw: None))
     factory = httpx.Client
     def handle(request):
-        assert request.method == "GET" and request.url.path == "/openai/v1/models"
-        assert request.headers["Authorization"] == "Bearer fake-asr-key"
-        return httpx.Response(200)
+        # Each service sees only its own key.
+        assert request.method == "GET"
+        if request.url.host == "api.groq.com":
+            assert request.url.path == "/openai/v1/models"
+            assert request.headers["Authorization"] == "Bearer fake-asr-key"
+            return httpx.Response(200, json={"data": [{"id": "whisper-large-v3-turbo"}]})
+        assert request.url.host == "api.deepseek.com" and request.url.path == "/models"
+        assert request.headers["Authorization"] == "Bearer fake-notes-key"
+        return httpx.Response(200, json={"data": [{"id": "deepseek-flash"}]})
     monkeypatch.setattr(httpx, "Client", lambda **kw: factory(transport=httpx.MockTransport(handle), **kw))
     assert cli.doctor(config) == 0
     output = capsys.readouterr().out
-    assert "转录服务" in output and "转录 key" in output and "WhisperLiveKit" not in output
+    assert "✓ 转录服务" in output and "✓ 转录 key" in output and "WhisperLiveKit" not in output
+    assert "✓ 笔记服务（DeepSeek）" in output and "fake-notes-key" not in output and "fake-asr-key" not in output
+    assert "✓ 默认源麦克风音量：85%" in output
+    assert fake_wpctl.calls == [["wpctl", "get-volume", "@DEFAULT_AUDIO_SOURCE@"]]
 
 
 def test_microphone_keeps_buffering_during_retry(tmp_path, monkeypatch):
@@ -470,13 +483,15 @@ def test_other_child_roles_never_receive_asr_key(tmp_path, monkeypatch, mode):
         # Both modes here use the local backend, whose capture child has no use for the key.
         assert "LECTURE_ASR_API_KEY" not in env
         assert ("DEEPSEEK_API_KEY" in env) == (role == "_worker")
+        assert ("LECTURE_NOTES_API_KEY" in env) == (role == "_worker")
 
 
-@pytest.mark.parametrize("argument,expected", [("--api", 1), ("", 2), ("--gpu", 3)])
+@pytest.mark.parametrize("argument,expected", [("--api", 1), ("--profile=cpu", 2), ("--gpu", 3)])
 def test_install_modes_use_lightweight_or_original_dependencies(tmp_path, argument, expected):
     project = tmp_path / "project"
     project.mkdir()
-    (project / "install.sh").write_text((Path(__file__).resolve().parents[1] / "install.sh").read_text())
+    for name in ("install.sh", "pyproject.toml"):
+        (project / name).write_text((Path(__file__).resolve().parents[1] / name).read_text())
     executable = project / ".venv" / "bin" / "python"
     executable.parent.mkdir(parents=True)
     executable.symlink_to(sys.executable)
@@ -489,12 +504,11 @@ def test_install_modes_use_lightweight_or_original_dependencies(tmp_path, argume
     env = dict(os.environ, PATH=str(bin_dir) + os.pathsep + os.environ["PATH"],
                XDG_BIN_HOME=str(tmp_path / "bin"), XDG_DATA_HOME=str(tmp_path / "data"),
                UV_TEST_LOG=str(log))
-    command = ["bash", str(project / "install.sh")]
-    if argument:
-        command.append(argument)
+    # Without the GUI extras: these are exactly the installs the script made before --profile existed.
+    command = ["bash", str(project / "install.sh"), argument, "--no-gui"]
     result = subprocess.run(command, env=env, capture_output=True, text=True, timeout=10)
     assert result.returncode == 0, result.stdout + result.stderr
-    calls = log.read_text().splitlines()
+    calls = [call for call in log.read_text().splitlines() if call.startswith("pip install")]
     assert len(calls) == expected
     if argument == "--api":
         assert "requirements" not in calls[0] and "torch" not in calls[0]

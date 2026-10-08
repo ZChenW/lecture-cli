@@ -10,12 +10,12 @@ import numpy as np
 import pytest
 
 from lecture_cli import refinement, final_notes
-from lecture_cli.storage import Journal, events, final_events, read_json, write_json
 from lecture_cli.worker import APIError
+from lecture_cli.storage import ATTACHMENT_DIR, Journal, attachment_path, events, final_events, read_json, write_json
 
 
 def session(root):
-    write_json(root / "session.json", dict(course="MATH421", started="today", model="deepseek-flash",
+    write_json(root / "session.json", dict(course="MATH421", started="today", notes_model="deepseek-flash",
                output=str(root / "notes.md"), refine=True, language="en"))
     (root / "transcript.jsonl").write_text(json.dumps(dict(id=1, start="00:00:00", end="00:01:01",
                                                          text="24 AC live error")) + "\n")
@@ -83,7 +83,7 @@ def test_corrected_source_reaches_final_notes_and_controller_recovery(tmp_path):
     journal.render(finished=True)
     assert "24 AC" not in calls[0]
     assert "minus four ac corrected" in calls[0]
-    assert "minus four ac corrected" in (tmp_path / "notes.transcript.md").read_text()
+    assert "minus four ac corrected" in (tmp_path / ATTACHMENT_DIR / "notes.transcript.md").read_text()
     assert "编号独立" in (tmp_path / "notes.md").read_text()
     journal.close()
 
@@ -114,9 +114,30 @@ def test_non_silent_empty_result_is_failure(tmp_path):
     assert "24 AC" in final_events(tmp_path)[0]["text"]
 
 
-@pytest.mark.parametrize("mode", ["success", "failure", "cancel"])
-def test_real_controller_waits_for_refine_and_cleans_audio(tmp_path, mode):
-    fail = mode != "success"
+@pytest.mark.parametrize("text", [".", "。", " … ", "?!"])
+def test_non_silent_punctuation_only_result_is_failure(tmp_path, text):
+    # Plan GUI-4 Q1.1: a result without a letter, digit or CJK character counts as no text recognised.
+    session(tmp_path)
+    archive = refinement.AudioArchive(tmp_path)
+    archive.append(np.full(16000, 1000, dtype="<i2").tobytes())
+    archive.close()
+    assert refinement.refine(tmp_path, lambda pcm: text) == 1
+    assert "24 AC" in final_events(tmp_path)[0]["text"]
+    assert "有声片段" in read_json(tmp_path / "refinement-state.json")["reason"]
+
+
+def test_near_silent_punctuation_only_result_is_the_near_silent_placeholder(tmp_path):
+    session(tmp_path)
+    archive = refinement.AudioArchive(tmp_path)
+    archive.append(np.full(16000, 10, dtype="<i2").tobytes())
+    archive.close()
+    assert refinement.refine(tmp_path, lambda pcm: "。") == 0
+    assert [r["text"] for r in final_events(tmp_path)] == ["[近静音片段，未识别到文字]"]
+
+
+@pytest.mark.parametrize("mode", ["success", "failure", "cancel", "skip", "unobserved"])
+def test_real_controller_waits_for_refine_and_cleans_audio(tmp_path, mode, isolated_run_registry):
+    fail = mode in ("failure", "cancel", "skip")
     root = Path(__file__).resolve().parents[1]
     shim = tmp_path / "shim"
     shim.mkdir()
@@ -124,7 +145,16 @@ def test_real_controller_waits_for_refine_and_cleans_audio(tmp_path, mode):
 import sys, json, os
 from pathlib import Path
 from lecture_cli import cli
-cli.capture_python = lambda model: sys.executable
+cli.capture_python = lambda model, *args: sys.executable
+if os.environ.get("REFINE_TEST_NO_STATE") and not {"_worker", "_capture", "_refine"} & set(sys.argv):
+    original_write_json = cli.write_json
+    def write_json(path, value):
+        if path.name == "controller-state.json":
+            with open(os.environ["REFINE_TEST_NO_STATE"], "a") as log:
+                log.write(value["phase"] + "\\n")
+            raise OSError(28, "No space left on device")
+        original_write_json(path, value)
+    cli.write_json = write_json
 if "_capture" in sys.argv:
     from lecture_cli import capture
     from lecture_cli.storage import write_json
@@ -174,18 +204,30 @@ if "_worker" in sys.argv:
     if fail:
         env["REFINE_TEST_FAIL"] = "1"
     marker = tmp_path / "refine.started"
-    if mode == "cancel":
+    attempts = tmp_path / "phases.txt"
+    if mode == "unobserved":
+        env["REFINE_TEST_NO_STATE"] = str(attempts)
+    if mode in ("cancel", "skip"):
         env["REFINE_TEST_CANCEL"] = str(marker)
     process = subprocess.Popen([sys.executable, "-m", "lecture_cli", "--courses-dir", str(courses),
-                                "start", "MATH421", "--refine"], env=env,
-                               stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+                                "start", "MATH421", "--refine"] + (["--headless"] if mode == "skip" else []),
+                               env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
     try:
-        if mode == "cancel":
+        if mode in ("cancel", "skip"):
             deadline = time.monotonic() + 10
             while not marker.exists() and process.poll() is None and time.monotonic() < deadline:
                 time.sleep(0.05)
             assert marker.exists()
+        if mode == "cancel":
             process.send_signal(signal.SIGINT)
+        elif mode == "skip":
+            # An outside observer sees a skippable phase and asks to skip it.
+            directory = next(path for path in Path("/tmp").glob(f"lecture-{os.getuid()}-*")
+                             if str(courses) in read_json(path / "session.json").get("output", ""))
+            state = read_json(directory / "controller-state.json")
+            assert state["phase"] == "refining" and state["can_skip"] is True
+            assert [stage["name"] for stage in state["stages"]] == ["录制与转录", "离线校正"]
+            (directory / "skip-refine").touch()
         stdout, stderr = process.communicate(timeout=25)
         assert process.returncode == 0, stdout + stderr
     finally:
@@ -195,10 +237,23 @@ if "_worker" in sys.argv:
     note_path = next(p for p in (courses / "MATH421" / "LectureNotes").glob("*.md")
                      if not p.stem.endswith((".live", ".review", ".transcript")))
     note = note_path.read_text()
-    assert "LIVE_SOURCE" in note_path.with_suffix('.transcript.md').read_text()
+    assert "LIVE_SOURCE" in attachment_path(note_path, 'transcript').read_text()
+    skipped = mode in ("cancel", "skip")
+    # A user skip is reported as skipped, never as a failure; the two flags exclude each other.
+    failed = fail and not skipped
     assert ("CORRECTED_SOURCE" in note) is not fail
-    assert (refinement.WARNING in note) is fail
-    if mode == "cancel":
-        assert "用户跳过" in note_path.with_suffix('.review.md').read_text()
+    assert (refinement.WARNING in note) is failed and (refinement.SKIPPED in note) is skipped
+    if skipped:
+        assert "用户跳过" in attachment_path(note_path, 'review').read_text()
+    record = json.loads(next(isolated_run_registry.glob("*.json")).read_text())
+    assert record["status"] == "done" and record["flags"]["refinement_failed"] is failed
+    assert record["flags"]["refinement_skipped"] is skipped
+    assert [stage["name"] for stage in record["stages"]] == ["录制与转录", "离线校正", "课后笔记"]
+    assert (refinement.WARNING in record["warnings"]) is failed
+    assert (refinement.SKIPPED in record["warnings"]) is skipped
+    if mode == "unobserved":
+        # Every phase, including the refinement wait, tried to publish and failed harmlessly.
+        assert {"starting", "recording", "draining", "refining", "finalizing", "saving"} <= \
+            set(attempts.read_text().split())
     for directory in Path("/tmp").glob(f"lecture-{os.getuid()}-*"):
         assert str(courses) not in str(read_json(directory / "session.json"))

@@ -56,7 +56,7 @@ async def probe(model, key):
 
 async def main():
     configuration()
-    key = os.environ['DEEPSEEK_API_KEY']
+    key = os.environ['LECTURE_NOTES_API_KEY']
     results = await asyncio.gather(*(probe(model, key) for model in ('deepseek-flash', 'deepseek-v4-pro')))
     print(json.dumps(results, ensure_ascii=False, indent=2))
 

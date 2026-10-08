@@ -1,0 +1,290 @@
+"""Versioned user configuration: defaults, migration, validation and API keys."""
+from __future__ import annotations
+
+import copy
+from dataclasses import dataclass
+import json
+import os
+from pathlib import Path
+
+from .providers import ASR_PRESETS, NOTES_PRESETS
+from .storage import atomic_text, write_json
+
+CONFIG_VERSION = 2
+DEFAULTS = {
+    "config_version": CONFIG_VERSION,
+    "courses_dir": None,
+    "notes_provider": "deepseek",
+    "notes_api_base": NOTES_PRESETS["deepseek"]["api_base"],
+    "notes_model": NOTES_PRESETS["deepseek"]["model"],
+    "notes_extra_body": NOTES_PRESETS["deepseek"]["extra_body"],
+    "asr_backend": "local",
+    "asr_model": "base.en",
+    "asr_device": "auto",
+    "asr_provider": "groq",
+    "asr_api_base": ASR_PRESETS["groq"]["api_base"],
+    "asr_api_model": ASR_PRESETS["groq"]["model"],
+    "language": "en",
+    "interval": 60,
+    "device": None,
+    "refine": False,
+    "refine_model": "qwen3-asr-1.7b",
+    # Plan N4: "local" refines with Qwen on this machine, "api" with the transcription service.
+    "refine_backend": "local",
+    "refine_api_model": "whisper-large-v3",
+    "auto_gain": True,
+    "qwen_python": None,
+    # Program names from lecture_cli.openers tables; None picks the first one installed.
+    "file_manager": None,
+    "terminal": None,
+    "editor": None,
+    # Per-course remembered choices, e.g. {"MATH421": {"language": "zh"}}.
+    "course_settings": {},
+    # The GUI's first-run setup was finished or skipped; afterwards the app opens at home.
+    "onboarded": False,
+}
+# Environment variables first, then files in the configuration directory; legacy names last.
+KEY_SOURCES = {
+    "notes": (("LECTURE_NOTES_API_KEY", "DEEPSEEK_API_KEY"), ("notes-api-key", "api-key")),
+    "asr": (("LECTURE_ASR_API_KEY",), ("asr-api-key",)),
+}
+# Child processes receive keys only under these names.
+KEY_VARIABLES = {"notes": "LECTURE_NOTES_API_KEY", "asr": "LECTURE_ASR_API_KEY"}
+
+
+# Fields only the GUI uses; command-line lectures never stop on them.
+GUI_ONLY = ("courses_dir", "file_manager", "terminal", "editor", "file_manager_command", "terminal_command",
+            "editor_command", "course_settings", "onboarded")
+# What a lecture cannot start without, in the order the GUI lists them.
+REQUIRED = ("courses_dir", "notes_key", "asr_key")
+
+
+@dataclass(frozen=True)
+class Problem:
+    field: str
+    message: str
+
+
+def config_dir() -> Path:
+    return Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config")) / "lecture-cli"
+
+
+def config_path() -> Path:
+    return config_dir() / "config.json"
+
+
+def migrate(raw: dict) -> dict:
+    """Upgrade an unversioned (v1) configuration; unknown keys are kept."""
+    if "config_version" in raw:
+        return dict(raw)
+    result = dict(raw)
+    if "model" in result:
+        result.setdefault("notes_model", result.pop("model"))
+    if "courses_dir" not in result:
+        # v1 silently defaulted to the author's folder; keep that only where it really exists.
+        legacy = Path.home() / "Downloads" / "Umass_CS_Class"
+        result["courses_dir"] = str(legacy) if legacy.is_dir() else None
+    for key in ("notes_provider", "notes_api_base", "notes_extra_body"):
+        result.setdefault(key, copy.deepcopy(DEFAULTS[key]))
+    base = result.get("asr_api_base", DEFAULTS["asr_api_base"])
+    result.setdefault("asr_provider", "groq" if isinstance(base, str) and "groq.com" in base else "custom")
+    result["config_version"] = CONFIG_VERSION
+    return result
+
+
+def load() -> dict:
+    path = config_path()
+    try:
+        text = path.read_text()
+        raw = json.loads(text)
+    except (FileNotFoundError, json.JSONDecodeError):
+        text, raw = None, {}  # As before, an unreadable file falls back to defaults untouched.
+    if not isinstance(raw, dict):
+        raw = {}
+    if text is not None and raw and "config_version" not in raw:
+        # Keep the original bytes before the migrated file replaces it.
+        atomic_text(path.with_name("config.json.v1.bak"), text)
+        raw = migrate(raw)
+        save(raw)
+    return {**copy.deepcopy(DEFAULTS), **raw}
+
+
+def save(config: dict) -> None:
+    directory = config_dir()
+    directory.mkdir(parents=True, exist_ok=True, mode=0o700)
+    write_json(directory / "config.json", config)
+
+
+def _http_url(value) -> bool:
+    return isinstance(value, str) and value.startswith(("https://", "http://"))
+
+
+def _nonempty(value) -> bool:
+    return isinstance(value, str) and bool(value.strip())
+
+
+def validate(config: dict) -> list[Problem]:
+    from .asr import QWEN_MODELS
+    problems = []
+    root = config.get("courses_dir")
+    if not root:
+        problems.append(Problem("courses_dir", "尚未设置课程目录"))
+    elif not Path(root).expanduser().is_dir():
+        problems.append(Problem("courses_dir", f"课程目录不存在：{root}"))
+    interval = config.get("interval")
+    if isinstance(interval, bool) or not isinstance(interval, (int, float)) or not 1 <= interval <= 3600:
+        problems.append(Problem("interval", "间隔必须在 1–3600 秒之间"))
+    if config.get("asr_backend") not in ("local", "api"):
+        problems.append(Problem("asr_backend", "采集后端必须为 local 或 api"))
+    if not _http_url(config.get("asr_api_base")):
+        problems.append(Problem("asr_api_base", "转录服务地址须以 http:// 或 https:// 开头"))
+    if config.get("asr_backend") == "api" and not _nonempty(config.get("asr_api_model")):
+        problems.append(Problem("asr_api_model", "云端转录须配置非空模型名称"))
+    if not _http_url(config.get("notes_api_base")):
+        problems.append(Problem("notes_api_base", "笔记服务地址须以 http:// 或 https:// 开头"))
+    if not _nonempty(config.get("notes_model")):
+        problems.append(Problem("notes_model", "笔记模型名称不能为空"))
+    if not isinstance(config.get("notes_extra_body"), dict):
+        problems.append(Problem("notes_extra_body", "notes_extra_body 必须是 JSON 对象"))
+    if config.get("refine_model") not in QWEN_MODELS:
+        problems.append(Problem("refine_model", "课后校正模型必须是 " + "、".join(QWEN_MODELS) + " 之一"))
+    if config.get("refine_backend") not in ("local", "api"):
+        problems.append(Problem("refine_backend", "课后校正方式必须为 local 或 api"))
+    if config.get("refine_backend") == "api" and not _nonempty(config.get("refine_api_model")):
+        problems.append(Problem("refine_api_model", "云端课后校正须配置非空模型名称"))
+    from .openers import problems as opener_problems
+    problems += [Problem(field, message) for field, message in opener_problems(config)]
+    if not course_settings_valid(config.get("course_settings")):
+        problems.append(Problem("course_settings", "course_settings 必须形如 {\"课程名\": {\"language\": \"zh\", \"asr_model\": \"qwen3-asr-1.7b\", \"refine\": \"on\"}}"))
+    if not isinstance(config.get("onboarded"), bool):
+        problems.append(Problem("onboarded", "onboarded 必须是 true 或 false"))
+    return problems
+
+
+# asr_model: plan N3.1, the live model chosen for this course. refine: plan GUI-3 item 3, "on" or
+# "off" as last chosen in the GUI start dialog; only that dialog reads it (lecture start does not).
+COURSE_SETTINGS = ("language", "asr_model", "refine")
+
+
+def course_settings_valid(value) -> bool:
+    return isinstance(value, dict) and all(
+        isinstance(name, str) and isinstance(entry, dict) and all(
+            key in COURSE_SETTINGS and isinstance(setting, str) and setting.strip()
+            and (key != "refine" or setting in ("on", "off")) for key, setting in entry.items())
+        for name, entry in value.items())
+
+
+def course_setting(config: dict, course: str, key: str) -> str | None:
+    """A setting remembered for this course, if any; unknown courses simply have none."""
+    entry = config.get("course_settings")
+    entry = entry.get(course) if isinstance(entry, dict) else None
+    value = entry.get(key) if isinstance(entry, dict) else None
+    return value if isinstance(value, str) and value.strip() else None
+
+
+def course_language(config: dict, course: str) -> str | None:
+    return course_setting(config, course, "language")
+
+
+def course_asr_model(config: dict, course: str) -> str | None:
+    return course_setting(config, course, "asr_model")
+
+
+def remember_course_setting(course: str, key: str, value: str) -> None:
+    current = load()
+    remembered = current.get("course_settings")
+    remembered = dict(remembered) if course_settings_valid(remembered) else {}
+    remembered[course] = {**remembered.get(course, {}), key: value}
+    save({**current, "course_settings": remembered})
+
+
+def remember_course_language(course: str, language: str) -> None:
+    remember_course_setting(course, "language", language)
+
+
+def remember_course_asr_model(course: str, model: str) -> None:
+    remember_course_setting(course, "asr_model", model)
+
+
+def missing(config: dict, keys: dict) -> list[str]:
+    """The REQUIRED items still unset; keys maps "notes"/"asr" to key_status() results."""
+    root = config.get("courses_dir")
+    found = []
+    if not root or not Path(root).expanduser().is_dir():
+        found.append("courses_dir")
+    if not keys["notes"]["set"]:
+        found.append("notes_key")
+    if config.get("asr_backend") == "api" and not keys["asr"]["set"]:
+        found.append("asr_key")
+    return found
+
+
+def is_configured(config: dict, keys: dict) -> bool:
+    return not missing(config, keys)
+
+
+def key_origin(kind: str) -> tuple[str, str | None, str | None]:
+    """(value, "env" or "file" or None, the environment variable that supplied it)."""
+    variables, filenames = KEY_SOURCES[kind]
+    for variable in variables:
+        if value := os.environ.get(variable, "").strip():
+            return value, "env", variable
+    stored = stored_key(kind)
+    return stored, ("file" if stored else None), None
+
+
+def stored_key(kind: str) -> str:
+    for filename in KEY_SOURCES[kind][1]:
+        try:
+            if value := (config_dir() / filename).read_text().strip():
+                return value
+        except FileNotFoundError:
+            continue
+    return ""
+
+
+def read_key(kind: str) -> tuple[str, str | None]:
+    value, source, _ = key_origin(kind)
+    return value, source
+
+
+def key_status(kind: str) -> dict:
+    """Never the key itself: whether it is set, where from, its last four characters, and whether a
+    key file holds the same value (so starting from the application menu finds it too)."""
+    value, source, variable = key_origin(kind)
+    return {"set": bool(value), "source": source, "tail": value[-4:] if value else None,
+            "variable": variable, "stored": bool(value) and stored_key(kind) == value}
+
+
+def write_key(kind: str, value: str) -> dict:
+    value = value.strip()
+    if not value or any(c in value for c in "\r\n"):
+        raise ValueError("key 不能为空，也不能包含换行")
+    directory = config_dir()
+    directory.mkdir(parents=True, exist_ok=True, mode=0o700)
+    # mkstemp creates the file with mode 600 before any byte is written.
+    atomic_text(directory / KEY_SOURCES[kind][1][0], value + "\n")
+    return key_status(kind)
+
+
+def persist_key(kind: str) -> dict:
+    """Write the key from the environment into the key file; the value never leaves this process."""
+    value, source, _ = key_origin(kind)
+    if source != "env":
+        raise LookupError("该 key 不是来自环境变量")
+    return write_key(kind, value)
+
+
+def delete_key(kind: str) -> dict:
+    """Remove stored key files, including the legacy name; environment variables stay."""
+    for filename in KEY_SOURCES[kind][1]:
+        (config_dir() / filename).unlink(missing_ok=True)
+    return key_status(kind)
+
+
+def load_keys() -> None:
+    """Expose each resolved key to this process under its single transport name."""
+    for kind, variable in KEY_VARIABLES.items():
+        value, _ = read_key(kind)
+        if value:
+            os.environ[variable] = value

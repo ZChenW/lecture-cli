@@ -1,0 +1,8 @@
+# Loopback GUI backend (pyproject extra "gui"), pinned to the versions in requirements.lock.
+anyio==4.15.1
+click==8.5.0
+h11==0.16.0
+idna==3.19
+starlette==1.6.0
+typing-extensions==4.16.0
+uvicorn==0.53.0

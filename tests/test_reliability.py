@@ -7,7 +7,7 @@ import pytest
 from lecture_cli import worker
 from lecture_cli.capture import Transcript
 from lecture_cli.cli import course_paths, preserve_tail, select_course
-from lecture_cli.storage import Journal, events, normalize_markdown, write_json
+from lecture_cli.storage import ATTACHMENT_DIR, Journal, events, normalize_markdown, write_json
 
 
 @pytest.fixture
@@ -15,7 +15,7 @@ def session(tmp_path):
     directory = tmp_path / "session"
     directory.mkdir()
     write_json(directory / "session.json", {"course": "MATH421", "started": "2026-09-14",
-               "output": str(tmp_path / "notes.md"), "model": "deepseek-flash", "interval": 1})
+               "output": str(tmp_path / "notes.md"), "notes_model": "deepseek-flash", "interval": 1})
     return directory
 
 
@@ -109,7 +109,7 @@ def test_api_outage_at_stop_keeps_unprocessed_text_in_final_note(session, monkey
     monkeypatch.setattr(worker, "complete", lambda *a: (_ for _ in ()).throw(worker.APIError("offline")))
     assert worker.run(session) == 0
     text = (session.parent / "notes.md").read_text()
-    assert "Keep this evidence." in (session.parent / 'notes.transcript.md').read_text()
+    assert "Keep this evidence." in (session.parent / ATTACHMENT_DIR / 'notes.transcript.md').read_text()
     assert "含待整理原文" in text and "已结束" in text
 
 
@@ -126,7 +126,7 @@ def test_capture_gap_warning_survives_final_summary_failure(session, monkeypatch
     text = (session.parent / "notes.md").read_text()
     assert warning in text
     assert "详细笔记未全部完成" in text
-    assert "特征向量非零" in (session.parent / 'notes.live.md').read_text()
+    assert "特征向量非零" in (session.parent / ATTACHMENT_DIR / 'notes.live.md').read_text()
 
 
 def test_producer_can_append_while_api_waits_and_worker_drains_last_batch(session, monkeypatch):
@@ -143,7 +143,7 @@ def test_producer_can_append_while_api_waits_and_worker_drains_last_batch(sessio
         if args and args[0] == 4000:
             return json.dumps(dict(continues_previous=False, topics=[
                 dict(title='课堂要点', question='讲了什么？', first=1, last=2)]))
-        return json.dumps(dict(body='课堂要点 [L1]', review='')) if args and args[0] == 8000 else '课堂要点 [L1]'
+        return '课堂要点 [L1]' if args and args[0] == 8000 else '课堂要点 [L1]'
     monkeypatch.setattr(worker, "complete", delayed)
     def run():
         try:
@@ -217,7 +217,30 @@ def test_reject_truncated_or_empty_api_output(reply, monkeypatch):
         def post(self, url, **kwargs):
             assert kwargs["json"]["thinking"] == {"type": "disabled"}
             return SimpleNamespace(status_code=200, json=lambda: reply)
-    monkeypatch.setenv("DEEPSEEK_API_KEY", "test-only")
+    monkeypatch.setenv("LECTURE_NOTES_API_KEY", "test-only")
     monkeypatch.setattr(worker.httpx, "Client", Client)
     with pytest.raises(worker.APIError):
         worker.complete([], "deepseek-flash")
+
+
+@pytest.mark.parametrize("failure, transient", [
+    (503, True), (429, True), (400, False), (401, False),
+    (worker.httpx.ReadTimeout("slow"), True), (worker.httpx.ConnectError("offline"), True),
+])
+def test_only_network_and_server_failures_are_marked_transient(failure, transient, monkeypatch):
+    class Client:
+        def __init__(self, **kwargs):
+            pass
+        def __enter__(self):
+            return self
+        def __exit__(self, *args):
+            pass
+        def post(self, url, **kwargs):
+            if isinstance(failure, Exception):
+                raise failure
+            return SimpleNamespace(status_code=failure)
+    monkeypatch.setenv("LECTURE_NOTES_API_KEY", "test-only")
+    monkeypatch.setattr(worker.httpx, "Client", Client)
+    with pytest.raises(worker.APIError) as caught:
+        worker.complete([], "deepseek-flash")
+    assert isinstance(caught.value, worker.TransientAPIError) is transient
