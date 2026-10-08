@@ -1,6 +1,7 @@
 """Bounded local audio archive and atomic offline transcription replacement."""
 from __future__ import annotations
 
+from contextlib import ExitStack
 from itertools import islice
 import json
 import math
@@ -18,6 +19,8 @@ MAX_ARCHIVE_BYTES = 512 * 1024 * 1024
 BATCH = 4
 WARNING = "离线校正未完成，详细笔记使用实时转录；可能含听辨错误。"
 SKIPPED = "已跳过离线校正，详细笔记依据实时转录；可能含听辨错误。"
+# Plan N4: said wherever cloud refinement is chosen or announced.
+UPLOAD_NOTICE = "课堂音频会上传到转录服务"
 
 
 class AudioArchive:
@@ -88,13 +91,21 @@ def segments(path: Path):
             offset = end
 
 
-def refine(directory: Path, transcribe=None) -> int:
+def label(meta: dict) -> str:
+    """What the after-class pass will run, before it reports its own status."""
+    if meta.get("refine_backend") == "api":
+        return f"云端 {meta.get('refine_api_model') or 'whisper-large-v3'} · 下课后重新转录"
+    return "Qwen 1.7B · 下课后自动重转录"
+
+
+def refine(directory: Path, transcribe=None, transport=None) -> int:
     from .capture import timestamp
     state_path = directory / "refinement-state.json"
     stage = "检查音频归档"
     # Progress for observers: audio seconds done of the total, and when the first segment began
     # (model loading excluded, so a rate can be extrapolated from it).
     progress = {}
+    stack = ExitStack()
     try:
         archive = read_json(directory / "archive.json")
         path = directory / "refinement.pcm"
@@ -102,9 +113,15 @@ def refine(directory: Path, transcribe=None) -> int:
                 not archive.get("bytes") or path.stat().st_size != archive["bytes"]):
             raise ValueError("离线音频不完整或不存在")
         meta = read_json(directory / "session.json")
-        stage = "加载离线 Qwen 模型"
+        # Plan N4: refine_backend "api" uploads the segments to the transcription service instead.
+        cloud = transcribe is None and meta.get("refine_backend") == "api"
+        stage = "连接云端转录服务" if cloud else "加载离线 Qwen 模型"
         progress.update(done_seconds=0, total_seconds=archive["bytes"] / BYTES_PER_SECOND, started=None)
         write_json(state_path, {"status": stage, **progress})
+        if cloud:
+            from .cloud_refine import CloudRefiner
+            refiner = stack.enter_context(CloudRefiner(meta, transport))
+            transcribe = refiner.transcribe
         if transcribe is None:
             import numpy as np
             from qwen_asr import Qwen3ASRModel
@@ -160,3 +177,5 @@ def refine(directory: Path, transcribe=None) -> int:
                                "stage": stage, "error": type(exc).__name__,
                                "reason": f"{type(exc).__name__}: {exc}"})
         return 1
+    finally:
+        stack.close()

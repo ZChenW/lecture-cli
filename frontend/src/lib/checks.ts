@@ -15,6 +15,7 @@ export const FIXES: Record<string, FixTarget | null> = {
   asr_device: "asr",
   asr_weights: "asr",
   refine: "refine",
+  refine_service: "refine",
   microphone: "mic",
   mic_volume: "mic",
   ffmpeg: null,

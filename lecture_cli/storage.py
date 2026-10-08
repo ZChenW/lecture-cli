@@ -244,7 +244,9 @@ class Journal:
             body += f" · [随堂记录]({quote(f'{ATTACHMENT_DIR}/{live_path.name}')})"
         body += "\n"
         if refined is not None:
-            body += "> 详细笔记依据 Qwen 离线重转录；live/refined 编号独立，时间戳为音频段范围。\n"
+            source = (f"云端离线重转录（{self.meta.get('refine_api_model') or 'whisper-large-v3'}）"
+                      if self.meta.get("refine_backend") == "api" else "Qwen 离线重转录")
+            body += f"> 详细笔记依据{source}；live/refined 编号独立，时间戳为音频段范围。\n"
         if info.get("warning"):
             body += f"\n> 记录提示：{info['warning']}\n"
         if info.get("summary"):

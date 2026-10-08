@@ -35,11 +35,14 @@ from . import runs
 from . import config as settings
 from .input_level import summary as weak_input_summary
 from .mic_gain import restore_volume, start_volume
+from .refinement import UPLOAD_NOTICE as CLOUD_REFINE_UPLOAD, label as refine_label
 
 console = Console()
 
 
 NO_COURSES_DIR = "尚未设置课程目录，请运行 lecture setup 或 lecture gui"
+CLOUD_REFINE_NO_KEY = ("云端课后校正需要转录 key，请设置 LECTURE_ASR_API_KEY 或写入配置目录的 asr-api-key 文件；"
+                       "也可以加 --no-refine 跳过本次校正")
 FALLBACK_NOTICE = "部分内容未完成笔记服务整理，已作为“待整理原文”保存在笔记中。"
 DETAIL_NOTICE = "详细笔记未全部完成；已完成章节及剩余原文已保存在笔记中。"
 REGISTRY_UNAVAILABLE = "运行登记暂不可用，已跳过更新；笔记不受影响。"
@@ -222,7 +225,7 @@ def display(directory: Path, stage: str = "", worker_dead=False):
     table.add_row("语音模型", Text(meta.get("asr_model", "")))
     if meta.get("refine"):
         table.add_row("课后校正", Text(read_json(directory / "refinement-state.json").get(
-            "status", asr.get("refinement_warning") or "Qwen 1.7B · 下课后自动重转录")))
+            "status", asr.get("refinement_warning") or refine_label(meta))))
     if asr.get("device_notice"):
         table.add_row("设备提示", Text(asr["device_notice"]))
     if asr.get("gain_notice"):
@@ -402,12 +405,16 @@ def session(args, config: dict, course: Path) -> int:
         if role == "_capture" and meta.get("asr_backend") != "api":
             env = capture_environment(meta["asr_model"], env)
             python = capture_python(meta["asr_model"], meta.get("qwen_python"))
+        elif role == "_refine" and meta.get("refine_backend") == "api":
+            pass  # Plan N4: cloud refinement runs on this interpreter and loads no Qwen.
         elif role == "_refine":
             env = capture_environment(meta["refine_model"], env)
             env["HF_HUB_OFFLINE"] = "1"
             python = capture_python(meta["refine_model"], meta.get("qwen_python"))
         if role != "_capture" or meta.get("asr_backend") != "api":
             env.pop("LECTURE_ASR_API_KEY", None)
+        if role == "_refine" and meta.get("refine_backend") == "api" and os.environ.get("LECTURE_ASR_API_KEY"):
+            env["LECTURE_ASR_API_KEY"] = os.environ["LECTURE_ASR_API_KEY"]  # Plan N4: the transcription key, to this child only.
         if role != "_worker":
             env.pop("LECTURE_NOTES_API_KEY", None)
             env.pop("DEEPSEEK_API_KEY", None)
@@ -821,7 +828,7 @@ def main(argv=None):
         if name == "start":
             sub.add_argument("--asr-api-model", metavar="NAME", help="云端转录模型，仅影响本次运行")
             sub.add_argument("--refine", action=argparse.BooleanOptionalAction, default=None,
-                             help="下课后用 Qwen 1.7B 重转录；临时保存音频，完成后删除")
+                             help="下课后重新转录（配置 refine_backend：local 本机 Qwen，api 云端）；临时保存音频，完成后删除")
             sub.add_argument("--auto-gain", action=argparse.BooleanOptionalAction, default=None,
                              help="自动降低 PipeWire 默认麦克风的削波音量，默认启用")
             sub.add_argument("--device", help="麦克风编号或名称")
@@ -941,8 +948,10 @@ def main(argv=None):
                     raise ValueError("缺少转录 key，请设置 LECTURE_ASR_API_KEY 或写入配置目录的 asr-api-key 文件")
             if args.command == "start" and config["asr_backend"] == "local":
                 capture_python(config["asr_model"], config.get("qwen_python"))
-                if config.get("refine"):
+                if config.get("refine") and config.get("refine_backend") != "api":
                     capture_python(config["refine_model"], config.get("qwen_python"))
+                elif config.get("refine") and not os.environ.get("LECTURE_ASR_API_KEY"):
+                    raise ValueError(CLOUD_REFINE_NO_KEY)
             if not os.environ.get("LECTURE_NOTES_API_KEY"):
                 raise ValueError("缺少笔记服务 key，请先运行 lecture setup 或设置 LECTURE_NOTES_API_KEY")
             course = select_course(root, args.course)
@@ -952,6 +961,9 @@ def main(argv=None):
             if args.command == "start":
                 # Plan N3.1: --asr-model wins, then the live model remembered for this course, then the default.
                 console.print(live_model_line(args, config, course.name), markup=False, soft_wrap=True)
+                if config.get("refine") and config["asr_backend"] == "local" and config.get("refine_backend") == "api":
+                    console.print(f"课后校正：云端 {config['refine_api_model']}（{CLOUD_REFINE_UPLOAD}）",
+                                  markup=False, soft_wrap=True)
             if args.command == "start" and config["asr_backend"] == "local" and \
                     config["asr_model"] in QWEN_MODELS and config["language"] == "auto":
                 raise ValueError("Qwen 流式识别需要 --language en 或 zh")

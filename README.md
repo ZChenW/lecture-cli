@@ -196,6 +196,17 @@ lecture start MATH421 --asr-model large-v3-turbo --refine  # 显式启用
 
 启用时额外暂存本次已输入 ASR 的 16 kHz 单声道 PCM，约 **110 MiB/小时**，上限 **512 MiB（约 4 小时 40 分钟）**，暂停期间不录入。达到上限或暂存写入失败不打断实时识别，但本次不再采用离线结果。文件仅位于私有 `/tmp`；若 `/tmp` 是 tmpfs，这会占用内存/交换空间。笔记成功保存后自动清理；目标目录不可写时保留暂存等待恢复。
 
+### 课后校正改用云端 API（可选）
+
+下课要走、本机校正还没跑完时，可以把课后校正交给转录服务：在配置里设 `"refine": true, "refine_backend": "api"`（图形界面：设置 → 课后校正 → 云端 API）。默认仍是本机 Qwen（`"local"`）。
+
+- **课堂音频会上传到转录服务。** 使用转录服务的地址（`asr_api_base`）和转录 key（`LECTURE_ASR_API_KEY` 或配置目录的 `asr-api-key`）；key 只交给校正进程，不写入会话文件、日志或运行登记。实时转录仍可以是本地 Whisper/Qwen。
+- 模型由 `refine_api_model` 指定，默认 `whisper-large-v3`（不是 turbo）。课堂语言为中文时，请求的提示里会带一句要求加标点的中文。中文课堂本机 Qwen 通常更准。
+- 校正进程不加载 Qwen：仍按上文的 20–30 秒规则切段，逐段上传；上传、重试、响应校验和疑似幻听过滤沿用云端实时转录的代码。近静音段不上传。服务暂时不可用（429、5xx、网络错误）时每段最多重试 3 次（等 5、10、20 秒），仍失败就算这一段失败。
+- 成败规则与本机校正相同：任一段失败、有声片段识别为空、超时或被跳过，整份笔记回退实时转录。
+- 启用云端校正但没有转录 key 时，`lecture start` 在录音前报错；可以加 `--no-refine` 跳过本次校正。启动时会打印一行“课后校正：云端 whisper-large-v3（课堂音频会上传到转录服务）”。
+- 实时转录本身用云端 API 时，仍不做课后校正（不建立音频暂存）。
+
 ### zsh Tab 补全
 
 本机已接入用户补全目录。打开新终端后，输入 `lecture ` 按 Tab 可列出子命令；`lecture start ` 后按 Tab 可列出课程；`lecture start --asr-device ` 后按 Tab 可选择 `auto`、`cuda`、`cpu`。课程列表动态读取配置中的课程目录，支持 `--courses-dir` 指定其他目录。
@@ -281,8 +292,10 @@ lecture diagnose-asr MATH421 --audio-file /path/to/sample.wav --seconds 60
 | `language` | str | `"en"` | 课堂语言，如 `en`、`zh`、`auto` |
 | `interval` | number | `60` | 随堂笔记检查间隔（秒，1–3600） |
 | `device` | int/str/null | `null` | 麦克风编号或名称；`null` 为系统默认 |
-| `refine` | bool | `false` | 下课后用 Qwen 离线重转录 |
+| `refine` | bool | `false` | 下课后重新转录一遍（方式见 `refine_backend`） |
 | `refine_model` | str | `"qwen3-asr-1.7b"` | 课后校正模型：`qwen3-asr-1.7b` 或 `qwen3-asr-0.6b` |
+| `refine_backend` | str | `"local"` | 课后校正方式：`local` 本机 Qwen，`api` 上传到转录服务 |
+| `refine_api_model` | str | `"whisper-large-v3"` | 云端课后校正使用的模型 |
 | `auto_gain` | bool | `true` | 自动降低削波的默认麦克风音量 |
 | `qwen_python` | str 或 null | `null` | Qwen 环境的 Python 路径；`null` 时用项目里的 `.venv-qwen` |
 | `file_manager` | str 或 null | `null` | 图形界面“在文件夹中显示”的回退文件管理器：`nautilus`、`dolphin`、`thunar`、`nemo`、`caja`、`pcmanfm`；`null` 为按此顺序第一个已安装的 |

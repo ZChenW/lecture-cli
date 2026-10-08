@@ -84,6 +84,17 @@ def refine_ready(config, cached) -> Check:
     return check("refine", "课后校正", cached(model), model, f"运行 lecture prepare --asr-model {model}", bad="warn")
 
 
+def cloud_refine_ready(config, key, transport) -> list[Check]:
+    """Plan N4: cloud refinement needs the transcription key and the service to list its model."""
+    from .providers import test_asr
+    model = config.get("refine_api_model") or "whisper-large-v3"
+    found = [check("refine", "课后校正（云端）", bool(key), model,
+                   "设置 LECTURE_ASR_API_KEY 或写入配置目录的 asr-api-key 文件")]
+    if key:
+        found.append(service("refine_service", "课后校正服务", test_asr(dict(config, asr_api_model=model), key, transport)))
+    return found
+
+
 # fontconfig has no serif property; CJK families say it in their names (Noto Serif CJK, Source Han
 # Serif, AR PL UMing, SimSun, MS Mincho ...). Kai faces are neither, and count as neither.
 CJK_SERIF = re.compile(r"serif|song|sun\b|ming|mincho|宋|明", re.I)
@@ -152,7 +163,9 @@ def run_checks(config, *, environ=None, runner=None, which=None, cached=None, tr
         results.append(asr_device(config, runner))
         results.append(check("asr_weights", "语音模型权重", cached(config["asr_model"]), config["asr_model"],
                              f"运行 lecture prepare --asr-model {config['asr_model']}", bad="warn"))
-        if config.get("refine"):
+        if config.get("refine") and config.get("refine_backend") == "api":
+            results += cloud_refine_ready(config, environ.get("LECTURE_ASR_API_KEY", ""), transport)
+        elif config.get("refine"):
             results.append(refine_ready(config, cached))
     results += [
         microphone(config),

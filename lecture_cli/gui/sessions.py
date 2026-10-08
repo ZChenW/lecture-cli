@@ -16,6 +16,7 @@ from urllib.parse import quote
 
 from .. import runs
 from ..asr import QWEN_MODELS
+from ..refinement import label as refine_label
 
 START_TIMEOUT = 15
 # Closing estimate (seconds of closing work per recorded second), used until the registry has history.
@@ -266,7 +267,7 @@ def snapshot(directory: Path, cache: SnapshotCache | None = None) -> dict:
         },
         "refine": {
             "enabled": enabled,
-            "status": (refine.get("status") or asr.get("refinement_warning") or "Qwen 1.7B · 下课后自动重转录") if enabled else None,
+            "status": (refine.get("status") or asr.get("refinement_warning") or refine_label(meta)) if enabled else None,
             "reason": refine.get("reason"),
             "progress": progress,
             "eta_seconds": eta,

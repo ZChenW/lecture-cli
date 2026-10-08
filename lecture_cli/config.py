@@ -29,6 +29,9 @@ DEFAULTS = {
     "device": None,
     "refine": False,
     "refine_model": "qwen3-asr-1.7b",
+    # Plan N4: "local" refines with Qwen on this machine, "api" with the transcription service.
+    "refine_backend": "local",
+    "refine_api_model": "whisper-large-v3",
     "auto_gain": True,
     "qwen_python": None,
     # Program names from lecture_cli.openers tables; None picks the first one installed.
@@ -145,6 +148,10 @@ def validate(config: dict) -> list[Problem]:
         problems.append(Problem("notes_extra_body", "notes_extra_body 必须是 JSON 对象"))
     if config.get("refine_model") not in QWEN_MODELS:
         problems.append(Problem("refine_model", "课后校正模型必须是 " + "、".join(QWEN_MODELS) + " 之一"))
+    if config.get("refine_backend") not in ("local", "api"):
+        problems.append(Problem("refine_backend", "课后校正方式必须为 local 或 api"))
+    if config.get("refine_backend") == "api" and not _nonempty(config.get("refine_api_model")):
+        problems.append(Problem("refine_api_model", "云端课后校正须配置非空模型名称"))
     from .openers import problems as opener_problems
     problems += [Problem(field, message) for field, message in opener_problems(config)]
     if not course_settings_valid(config.get("course_settings")):
