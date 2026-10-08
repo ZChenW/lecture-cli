@@ -69,6 +69,27 @@ def read_json(path: Path) -> dict:
         return {}
 
 
+def has_content(text: str) -> bool:
+    """Plan GUI-4 §1: text with at least one letter, digit or CJK character. A segment of only
+    punctuation ("." "。" "…") is not something the lecturer said and never counts as text."""
+    return any(ch.isalnum() for ch in text)
+
+
+# Plan GUI-4 Q1.2: a recording that recognised nothing. The main note, the terminal and the GUI's
+# end page say so instead of pretending notes were written; gui/library.py looks for EMPTY_TITLE.
+EMPTY_TITLE = "这次录制没有识别出任何内容"
+EMPTY_CAUSES = ("麦克风没有收到声音", "选错了输入设备", "麦克风被静音")
+EMPTY_HINT = "可以运行 lecture doctor --mic-test 检查麦克风。"
+TEXT_MARKER = re.compile(r"^\[[^\]]*\]\s*")
+
+
+def no_content(directory: Path) -> bool:
+    """True when neither the live transcript nor a complete refinement holds any content text; a
+    near-silent placeholder or a 待核对 prefix alone is not content."""
+    records = events(directory) + (refined_events(directory) or [])
+    return not any(has_content(TEXT_MARKER.sub("", r.get("text", ""))) for r in records)
+
+
 def events(directory: Path) -> list[dict]:
     try:
         lines = (directory / "transcript.jsonl").read_text().splitlines(keepends=True)
@@ -244,6 +265,9 @@ class Journal:
             body += "> 演示：自造课堂文字，未录音，不是真实课程记录。\n\n"
         body += f"> {state}。自动课堂笔记；公式和听辨疑点需对照课件核实。\n"
         body += "> 时间为录入音频的相对时间（不含暂停），L 为本次转录片段编号。\n"
+        if info.get("empty"):
+            body += (f"\n> **{EMPTY_TITLE}。**\n> 可能的原因：{'、'.join(EMPTY_CAUSES)}。\n"
+                     f"> {EMPTY_HINT.replace('lecture doctor --mic-test', '`lecture doctor --mic-test`')}\n")
         body += f"\n[原始转录]({quote(main_transcript)})"
         if live:
             body += f" · [随堂记录]({quote(f'{ATTACHMENT_DIR}/{live_path.name}')})"

@@ -16,7 +16,7 @@ import numpy as np
 from .audio_buffer import AudioBuffer, drain_timeout
 from .capture import Transcript
 from .refinement import BYTES_PER_SECOND, segment_cut
-from .storage import read_json, write_json
+from .storage import has_content, read_json, write_json
 from .mic_gain import mic_gain
 from .input_level import WeakInput
 
@@ -107,6 +107,9 @@ def consume_response(transcript, result, offset, duration):
             continue
         text = segment["text"].strip()
         if not text:
+            continue
+        # Plan GUI-4 Q1.1: checked before the 疑似重复 prefix, which itself contains CJK text.
+        if not has_content(text):
             continue
         if segment.get("compression_ratio", 0) > 2.4:
             text = "[疑似重复，待核对] " + text

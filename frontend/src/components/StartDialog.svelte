@@ -10,6 +10,7 @@
   } from "../lib/start";
   import { app, message } from "../lib/state.svelte";
   import type { Missing, QwenLive } from "../lib/types";
+  import MicLevel from "./MicLevel.svelte";
   import Segments from "./Segments.svelte";
 
   // Plan GUI-3 item 3: design/F-dialog.reference.html, left half. Three rows of underlined segments.
@@ -36,6 +37,7 @@
   let error = $state("");
   let log = $state("");
   let dialog: HTMLDialogElement;
+  let meter = $state<ReturnType<typeof MicLevel>>();
   let blocked = $derived(missing.length > 0);
   // Qwen streaming needs a named language; with no Whisper model to fall back on, 自动 cannot be offered.
   const languages = $derived([
@@ -62,6 +64,7 @@
     if (blocked) return;
     busy = true;
     error = log = "";
+    meter?.stop();  // The lecture opens the microphone itself; let go of it first.
     try {
       await api.startRun(course, cloud ? { language } : {
         language, refine: refine === "on",
@@ -71,6 +74,7 @@
     } catch (e) {
       error = message(e);
       log = (e as { log?: string }).log ?? "";
+      meter?.restart();
     } finally {
       busy = false;
     }
@@ -95,7 +99,12 @@
         </ul>
       </div>
     {/if}
-    <div class="line first">
+    <!-- Plan GUI-4 Q1.5: whether the microphone hears anything, before the lecture starts. -->
+    <div class="line first mic">
+      <span id="start-mic" class="name">麦克风</span>
+      <div class="cell meter-cell" role="group" aria-labelledby="start-mic"><MicLevel passive bind:this={meter} /></div>
+    </div>
+    <div class="line">
       <span id="start-language" class="name">语言</span>
       <Segments labelledby="start-language" options={languages} bind:value={language} />
     </div>
@@ -157,6 +166,7 @@
   .name { font-size: 14px; letter-spacing: 0.08em; color: #5C5C5A; }
   .cloud { padding: 0 14px; font-family: var(--mono); font-size: 14px; color: #111111; overflow-wrap: anywhere; }
   .cell { display: flex; flex-direction: column; min-width: 0; }
+  .meter-cell { padding: 14px 14px 12px; }
   .upload { margin: 0 0 12px; padding: 0 14px; font-size: 12px; line-height: 1.7; color: #5C5C5A; }
   .footer { margin: 16px 0 0; font-size: 13px; line-height: 1.7; color: #5C5C5A; }
   .missing { margin-bottom: 16px; padding: 14px 0; border-top: 1px solid var(--line); font-size: 14px; }

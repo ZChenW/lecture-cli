@@ -179,6 +179,10 @@
               <span class="time">{formatNoteTime(note.started)}</span>
               <span class="kind">{note.kind ?? note.name}</span>
             </a>
+            {#if note.empty}
+              <!-- Plan GUI-4 Q1.2: the recording recognised nothing. -->
+              <span class="no-content">无内容<span class="visually-hidden">：这次录制没有识别出任何内容</span></span>
+            {/if}
             {#if count > 0}
               <a class="review has-tip" {href} onclick={() => (app.panel = "review")} aria-describedby="review-tip-{i}">
                 <span class="review-dot" aria-hidden="true"></span>{count} 处待核对
@@ -300,6 +304,15 @@
     text-decoration: none;
   }
   .review:hover { color: var(--warn); text-decoration: underline; text-underline-offset: 3px; }
+  .no-content {
+    flex: none;
+    display: inline-flex;
+    align-items: center;
+    min-height: 44px;
+    padding: 0 8px;
+    font-size: 13px;
+    color: var(--muted);
+  }
   .review-dot { width: 7px; height: 7px; border-radius: 50%; background: currentColor; }
   /* Shown on hover or keyboard focus; still in the Tab order when hidden. */
   .tools { flex: none; display: flex; align-items: center; opacity: 0; transition: opacity 120ms ease; }

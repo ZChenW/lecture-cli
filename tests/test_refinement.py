@@ -114,6 +114,27 @@ def test_non_silent_empty_result_is_failure(tmp_path):
     assert "24 AC" in final_events(tmp_path)[0]["text"]
 
 
+@pytest.mark.parametrize("text", [".", "。", " … ", "?!"])
+def test_non_silent_punctuation_only_result_is_failure(tmp_path, text):
+    # Plan GUI-4 Q1.1: a result without a letter, digit or CJK character counts as no text recognised.
+    session(tmp_path)
+    archive = refinement.AudioArchive(tmp_path)
+    archive.append(np.full(16000, 1000, dtype="<i2").tobytes())
+    archive.close()
+    assert refinement.refine(tmp_path, lambda pcm: text) == 1
+    assert "24 AC" in final_events(tmp_path)[0]["text"]
+    assert "有声片段" in read_json(tmp_path / "refinement-state.json")["reason"]
+
+
+def test_near_silent_punctuation_only_result_is_the_near_silent_placeholder(tmp_path):
+    session(tmp_path)
+    archive = refinement.AudioArchive(tmp_path)
+    archive.append(np.full(16000, 10, dtype="<i2").tobytes())
+    archive.close()
+    assert refinement.refine(tmp_path, lambda pcm: "。") == 0
+    assert [r["text"] for r in final_events(tmp_path)] == ["[近静音片段，未识别到文字]"]
+
+
 @pytest.mark.parametrize("mode", ["success", "failure", "cancel", "skip", "unobserved"])
 def test_real_controller_waits_for_refine_and_cleans_audio(tmp_path, mode, isolated_run_registry):
     fail = mode in ("failure", "cancel", "skip")

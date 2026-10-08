@@ -8,7 +8,7 @@ from pathlib import Path
 
 import httpx
 
-from .storage import CITATION, Journal, events, final_events, refined_events, normalize_markdown, read_json, source_text, write_json
+from .storage import CITATION, Journal, events, final_events, no_content, refined_events, normalize_markdown, read_json, source_text, write_json
 from .batching import MAX_BATCH_CHARS, merged_source_text, next_batch, ready_batch
 from .glossary import notes_glossary
 from .providers import notes_service
@@ -193,7 +193,11 @@ def run(directory: Path) -> int:
             from .refinement import SKIPPED, WARNING
             skipped = read_json(directory / "refinement-state.json").get("skipped") is True
             journal.add_warning(SKIPPED if skipped else WARNING)
-        generate(journal, final_events(directory), workers=WORKERS)
+        if no_content(directory):
+            # Plan GUI-4 Q1.2: nothing was recognised, so the notes service is never asked.
+            journal.set_info("empty", "yes")
+        else:
+            generate(journal, final_events(directory), workers=WORKERS)
         journal.render(finished=True)
         detail_status = dict(journal.db.execute("SELECT key, value FROM info")).get("detail_status")
         write_json(state_path, {"status": "详细笔记未全部完成" if detail_status == "incomplete" else "完成",

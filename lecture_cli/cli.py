@@ -25,7 +25,7 @@ from rich.panel import Panel
 from rich.table import Table
 from rich.text import Text
 
-from .storage import (ATTACHMENT_DIR, ATTACHMENTS, Journal, attachment_path, events, final_events,
+from .storage import (ATTACHMENT_DIR, ATTACHMENTS, EMPTY_CAUSES, EMPTY_HINT, EMPTY_TITLE, Journal, no_content, attachment_path, events, final_events,
                       refined_events, read_json, review_state_path, write_json)
 from .audio_buffer import drain_timeout
 from .asr import QWEN_MODELS, asr_models, resolve_asr_model, capture_python, capture_environment
@@ -334,6 +334,7 @@ def session(args, config: dict, course: Path) -> int:
     has_fallback = False
     detail_incomplete = False
     refinement_failed = False
+    empty = False  # Plan GUI-4 Q1.2: nothing recognised; the note and the registry say so.
     refinement_skipped = False
     discarded = False
     audio_seconds = None
@@ -383,7 +384,8 @@ def session(args, config: dict, course: Path) -> int:
                         stages=[{"name": name, "seconds": round(end - begin, 1)}
                                 for (name, begin), (_, end) in zip(marks, marks[1:])],
                         flags={"refinement_failed": refinement_failed, "refinement_skipped": refinement_skipped,
-                               "has_fallback": has_fallback, "detail_incomplete": detail_incomplete},
+                               "has_fallback": has_fallback, "detail_incomplete": detail_incomplete,
+                               "empty": empty},
                         audio_seconds=audio_seconds, warnings=notices, workspace_kept=kept)
         except OSError:  # Includes runs.Unavailable: a corrupt record must not change the exit code.
             console.print(REGISTRY_UNAVAILABLE, style="yellow", markup=False)
@@ -578,6 +580,9 @@ def session(args, config: dict, course: Path) -> int:
                         # A user skip is not a failure; the notes say which one happened.
                         journal.add_warning(SKIPPED if refinement_skipped else WARNING)
                         refinement_failed = not refinement_skipped
+                    if no_content(directory):
+                        empty = True
+                        journal.set_info("empty", "yes")
                     journal.fallback()
                     journal.preserve_detail_tail()
                     journal.render(finished=True)
@@ -632,6 +637,8 @@ def session(args, config: dict, course: Path) -> int:
         console.print(FALLBACK_NOTICE, style="yellow")
     if detail_incomplete:
         console.print(DETAIL_NOTICE, style="yellow")
+    if empty:
+        console.print(f"{EMPTY_TITLE}。可能的原因：{'、'.join(EMPTY_CAUSES)}。{EMPTY_HINT}", style="yellow", markup=False)
     return rc
 
 
@@ -746,7 +753,7 @@ def devices():
             console.print(f"{i:>3}  {device['name']}", markup=False)
 
 
-def doctor(config):
+def doctor(config, mic_test=False, mic_stream=None):
     from .checks import run_checks
     results = run_checks(config)
     for item in results:
@@ -754,7 +761,20 @@ def doctor(config):
                       + (f"：{item.detail}" if item.detail else ""), markup=False)
         if item.hint:
             console.print(f"  建议：{item.hint}", markup=False)
-    return 1 if any(item.level == "fail" for item in results) else 0
+    failed = any(item.level == "fail" for item in results)
+    if mic_test:
+        # Plan GUI-4 Q1.5: only with --mic-test does doctor open the microphone, for 5 s, levels only.
+        from . import mic_check
+        console.print(f"麦克风测试：请在接下来 {mic_check.TEST_SECONDS} 秒内正常说几句话…", markup=False)
+        try:
+            result = mic_check.run_test(config.get("device"), factory=mic_stream)
+        except Exception as exc:  # PortAudio missing, device gone or busy.
+            console.print(f"✗ 无法打开麦克风：{exc}", markup=False)
+            return 1
+        for line in mic_check.describe(result):
+            console.print(line, markup=False)
+        failed = failed or not result["passed"]
+    return 1 if failed else 0
 
 
 def main(argv=None):
@@ -824,6 +844,9 @@ def main(argv=None):
         if name in ("start", "prepare", "doctor"):
             sub.add_argument("--asr-model", metavar="NAME",
                              help="语音模型（lecture models 查看全部），覆盖已保存的默认值")
+        if name == "doctor":
+            sub.add_argument("--mic-test", action="store_true",
+                             help="另外录 5 秒测试麦克风（只看电平，不保存音频）；不加时不录音")
         if name in ("start", "doctor"):
             sub.add_argument("--asr-backend", choices=["local", "api"], help="采集后端，默认 local")
             sub.add_argument("--asr-device", choices=["auto", "cuda", "cpu"], help="识别设备，默认 auto 优先 GPU")
@@ -904,7 +927,7 @@ def main(argv=None):
         elif args.command == "setup":
             setup(config)
         elif args.command == "doctor":
-            return doctor(config)
+            return doctor(config, mic_test=args.mic_test)
         elif args.command == "prepare":
             console.print(f"下载模型：{config['asr_model']}", markup=False)
             if config["asr_model"] in QWEN_MODELS:

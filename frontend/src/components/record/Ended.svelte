@@ -3,7 +3,7 @@
   import { formatElapsed } from "../../lib/format";
   import { destinationLine, savedPath } from "../../lib/record";
   import { navigate } from "../../lib/router";
-  import { message } from "../../lib/state.svelte";
+  import { app, message } from "../../lib/state.svelte";
   import type { RunRecord } from "../../lib/types";
   import StateLabel from "./StateLabel.svelte";
 
@@ -15,10 +15,20 @@
     if (log) log.scrollTop = log.scrollHeight;
   });
   // A discarded run never reaches this page (Record goes home), so it is never shown as failed.
-  type Kind = "done" | "unsaved" | "failed";
-  let kind = $derived<Kind>(record.status === "done" || record.status === "unsaved" ? record.status : "failed");
-  const STATES: Record<Kind, string> = { done: "已保存", unsaved: "尚未保存", failed: "异常结束" };
-  const TITLES: Record<Kind, string> = { done: "笔记已保存", unsaved: "笔记尚未成功保存", failed: "课堂异常结束" };
+  // empty (plan GUI-4 Q1.2): saved, but nothing was recognised, so there are no notes to read.
+  type Kind = "done" | "empty" | "unsaved" | "failed";
+  let kind = $derived<Kind>(record.status === "done" ? (record.flags?.empty ? "empty" : "done")
+    : record.status === "unsaved" ? "unsaved" : "failed");
+  const STATES: Record<Kind, string> = { done: "已保存", empty: "没有内容", unsaved: "尚未保存", failed: "异常结束" };
+  const TITLES: Record<Kind, string> = {
+    done: "笔记已保存", empty: "没有识别出内容", unsaved: "笔记尚未成功保存", failed: "课堂异常结束",
+  };
+  const CAUSES = ["麦克风没有收到声音", "选错了输入设备", "麦克风被静音"];
+
+  function checkMic() {
+    app.section = "mic";
+    navigate("settings");
+  }
   let file = $derived(record.output?.split("/").pop() ?? "");
   // Skipping refinement is the user's choice, not a problem: a plain line, not a warning (plan N2.5).
   let skipped = $derived(!!record.flags?.refinement_skipped);
@@ -41,11 +51,11 @@
     {#if elapsed != null}<div class="timer" data-timer>{formatElapsed(elapsed)}</div>{/if}
     <div class="meta">
       <span>{dateline}</span>
-      {#if record.course}<span>{destinationLine(record.course, kind === "done")}</span>{/if}
+      {#if record.course && kind !== "empty"}<span>{destinationLine(record.course, kind === "done")}</span>{/if}
     </div>
   </section>
   <section class="center">
-    <span class="label">{kind === "done" ? "课堂结束" : kind === "unsaved" ? "需要处理" : "出错了"}</span>
+    <span class="label">{kind === "done" || kind === "empty" ? "课堂结束" : kind === "unsaved" ? "需要处理" : "出错了"}</span>
     <h1>{TITLES[kind]}</h1>
     {#if kind === "done"}
       <!-- Whole segments: a line may break at a separator, never inside the file name. -->
@@ -54,6 +64,15 @@
           <span class="segment" class:course={i === 0 && segments.length > 1}><span class="name">{segment}</span>{#if i < segments.length - 1}<span class="sep" aria-hidden="true">/</span>{/if}</span>
         {/each}
       </p>
+    {:else if kind === "empty"}
+      <div class="callout empty" role="status">
+        <span class="dot" aria-hidden="true"></span>
+        <div>
+          <p>这次录制没有识别出任何内容，所以没有生成笔记。可能的原因：</p>
+          <ul class="causes">{#each CAUSES as cause (cause)}<li>{cause}</li>{/each}</ul>
+          <p class="sub">可以在设置里测试麦克风，或在终端运行 <span class="mono cmd">lecture doctor --mic-test</span>。</p>
+        </div>
+      </div>
     {:else if kind === "unsaved"}
       <p class="callout" role="alert">
         <span class="dot" aria-hidden="true"></span>
@@ -92,6 +111,10 @@
       <button class="ghost" onclick={reveal}>在文件管理器中显示</button>
       <button class="primary" onclick={() => navigate("notes", record.course ?? "", file)}>阅读笔记</button>
     </div>
+  {:else if kind === "empty"}
+    <div class="controls">
+      <button class="primary" onclick={checkMic}>检查麦克风</button>
+    </div>
   {/if}
 </footer>
 
@@ -126,6 +149,10 @@
     font-size: 15px;
     line-height: 1.65;
   }
+  .callout.empty > div { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+  .causes { display: flex; flex-direction: column; gap: 2px; padding-left: 1.2em; list-style: disc; }
+  .callout .sub { font-size: 13px; color: #A9ABB0; }
+  .callout .cmd { white-space: nowrap; }
   .callout .dot { flex: none; width: 6px; height: 6px; border-radius: 50%; background: #FFB454; transform: translateY(-2px); }
   .log {
     margin: 0;

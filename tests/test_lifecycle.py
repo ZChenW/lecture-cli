@@ -361,7 +361,7 @@ def test_headless_demo_without_terminal_records_phases_and_run(stub_runtime, tmp
     assert record["run_id"] == note.stem and record["course"] == "MATH421"
     assert record["status"] == "done" and record["exit_code"] == 0 and record["workspace_kept"] is None
     assert record["flags"] == {"refinement_failed": False, "refinement_skipped": False, "has_fallback": False,
-                              "detail_incomplete": False}
+                              "detail_incomplete": False, "empty": False}
     assert [stage["name"] for stage in record["stages"]] == ["录制与转录", "课后笔记"]
     assert not Path(record["directory"]).exists() and "已结束" in note.read_text()
     text = json.dumps(record, ensure_ascii=False)

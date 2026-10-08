@@ -220,8 +220,9 @@ def check_overrides(overrides, root: Path) -> tuple[dict, Path | None]:
 
 
 def create_app(port: int, token: str, *, on_quit=None, sessions: Sessions | None = None,
-               transport=None, openers: desktop.Openers | None = None, trash=None) -> Starlette:
-    """openers and trash (a library.trash_note replacement) are injected by tests: nothing is launched."""
+               transport=None, openers: desktop.Openers | None = None, trash=None, mic_stream=None) -> Starlette:
+    """openers and trash (a library.trash_note replacement) are injected by tests: nothing is launched.
+    mic_stream(device, callback) replaces mic_check.open_stream, so tests never open a microphone."""
     sessions = sessions or Sessions()
     tasks = Tasks()
     openers = openers or desktop.Openers()
@@ -343,6 +344,70 @@ def create_app(port: int, token: str, *, on_quit=None, sessions: Sessions | None
         except Exception as exc:  # PortAudio missing or broken: the GUI shows the reason.
             raise ApiError(503, "devices_unavailable", f"无法列出麦克风：{exc}")
         return JSONResponse({"devices": listed, "selected": settings.load().get("device"), "notes": DEVICE_NOTES})
+
+    async def mic_level(request):
+        """Plan GUI-4 Q1.5: RMS and peak of the configured input every 100 ms, as server-sent events.
+        Levels only, never audio. ?test=1 listens 5 s and ends with the test's result; otherwise
+        the first 2 s end with the start dialog's passive verdict and levels go on until the page
+        disconnects. Refused while a lecture records; a lecture that starts meanwhile ends it."""
+        from .. import mic_check
+        if await run_in_threadpool(sessions.active):
+            raise ApiError(409, "busy", "录制进行中，不能同时测试麦克风")
+        testing = request.query_params.get("test") == "1"
+        loop = asyncio.get_running_loop()
+        blocks: asyncio.Queue = asyncio.Queue()
+
+        def callback(block):
+            try:
+                loop.call_soon_threadsafe(blocks.put_nowait, mic_check.block_level(block))
+            except RuntimeError:  # The server is shutting down; the stream is about to close.
+                pass
+
+        def start():
+            stream = (mic_stream or mic_check.open_stream)(settings.load().get("device"), callback)
+            stream.start()
+            return stream
+
+        try:
+            stream = await run_in_threadpool(start)
+        except Exception as exc:  # PortAudio missing, device gone or busy: the GUI shows the reason.
+            raise ApiError(503, "mic_unavailable", f"无法打开麦克风：{exc}")
+
+        async def stream_levels():
+            levels, checked = [], time.monotonic()
+            try:
+                while not await request.is_disconnected():
+                    try:
+                        level = await asyncio.wait_for(blocks.get(), timeout=1)
+                    except asyncio.TimeoutError:
+                        level = None
+                    if time.monotonic() - checked >= 1:
+                        checked = time.monotonic()
+                        if await run_in_threadpool(sessions.active):
+                            yield "event: busy\ndata: {}\n\n"
+                            return
+                    if level is None:
+                        yield ": keepalive\n\n"
+                        continue
+                    levels.append(level)
+                    yield f"event: level\ndata: {json.dumps(level)}\n\n"
+                    if testing and len(levels) == round(mic_check.TEST_SECONDS / mic_check.BLOCK_SECONDS):
+                        yield f"event: result\ndata: {json.dumps(mic_check.evaluate(levels))}\n\n"
+                        return
+                    if not testing and len(levels) == round(mic_check.PASSIVE_SECONDS / mic_check.BLOCK_SECONDS):
+                        yield f"event: still\ndata: {json.dumps({'still': mic_check.still(levels)})}\n\n"
+                    if not testing:
+                        levels = levels[-100:]  # Only the first 2 s matter; never grow without bound.
+            finally:
+                # Disconnect, end of test or a starting lecture: the device is released at once.
+                # Synchronously: a disconnect cancels this generator, so nothing here may await.
+                try:
+                    stream.stop()
+                finally:
+                    stream.close()
+
+        return StreamingResponse(stream_levels(), media_type="text/event-stream",
+                                 headers={"Cache-Control": "no-cache"})
 
     async def asr_models(request):
         from .. import checks
@@ -577,6 +642,7 @@ def create_app(port: int, token: str, *, on_quit=None, sessions: Sessions | None
         Route("/api/courses", list_courses),
         Route("/api/courses", add_course, methods=["POST"]),
         Route("/api/devices", devices),
+        Route("/api/mic/level", mic_level),
         Route("/api/asr-models", asr_models),
         Route("/api/qwen-live", qwen_live),
         Route("/api/asr-models/{name}/prepare", prepare, methods=["POST"]),

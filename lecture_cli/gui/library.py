@@ -6,7 +6,7 @@ import re
 import shutil
 import subprocess
 
-from ..storage import ATTACHMENTS, attachment_path, legacy_attachment_path, review_state_path
+from ..storage import ATTACHMENTS, EMPTY_TITLE, attachment_path, legacy_attachment_path, review_state_path
 from . import review as checklist
 
 TRASH_TIMEOUT = 30
@@ -85,7 +85,18 @@ def note_entry(path: Path) -> dict:
         unchecked, total = 0, 0
     return {"name": path.name, "path": str(path), "started": started, "kind": match[5] if match else None,
             "attachments": {kind: attachment_file(path, kind) is not None for kind in ATTACHMENTS},
-            "review_count": unchecked, "review_total": total}
+            "review_count": unchecked, "review_total": total, "empty": empty_note(path)}
+
+
+def empty_note(path: Path) -> bool:
+    """Plan GUI-4 Q1.2: the note of a recording that recognised nothing (storage.EMPTY_TITLE sits in
+    its header, well inside the first 4 KB)."""
+    try:
+        with path.open("rb") as file:
+            head = file.read(4096).decode("utf-8", "ignore")
+    except OSError:
+        return False
+    return f"**{EMPTY_TITLE}。**" in head
 
 
 def notes(root, course: Path) -> list[dict]:

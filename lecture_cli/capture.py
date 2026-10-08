@@ -9,7 +9,7 @@ import signal
 import time
 from pathlib import Path
 
-from .storage import read_json, write_json
+from .storage import has_content, read_json, write_json
 from .audio_buffer import AudioBuffer, drain_timeout
 from .asr import build_engine, session_context
 from .mic_gain import mic_gain
@@ -51,6 +51,9 @@ class Transcript:
 
     def append(self, text: str, start: float, end: float) -> None:
         if not text.strip():
+            return
+        # Plan GUI-4 Q1.1: punctuation alone is dropped and never takes a segment number.
+        if not has_content(text):
             return
         self.count += 1
         record = {"id": self.count, "start": timestamp(start), "end": timestamp(end), "text": text.strip()}
@@ -239,7 +242,7 @@ async def record(directory: Path) -> None:
             await processor.process_audio(b"")
             await collector
         transcript.flush()
-        if state["buffer"]:
+        if state["buffer"] and has_content(state["buffer"]):
             transcript.append("[未确认尾部，待核对] " + state["buffer"], state["seconds"], state["seconds"])
         state.update(status="转录完成", buffer="", lag=0)
         publish(True)

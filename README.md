@@ -70,6 +70,7 @@ lecture gui --no-window  # 只启动本机界面服务并打印地址
 ```sh
 lecture courses           # 查看已有课程
 lecture doctor            # 检查本地环境与服务连接（只请求 /models），不录音、不生成笔记
+lecture doctor --mic-test # 另外录 5 秒测试麦克风（只看电平，不保存、不上传音频）
 lecture diagnose-asr MATH421 --seconds 30  # 同一段音频对比两个 ASR，不调用 DeepSeek
 lecture start             # 选择课程，开始录制
 lecture start math421     # 直接选择 MATH421
@@ -445,7 +446,28 @@ SIGKILL、断电无法执行即时清理；下次运行 `lecture` 的任一子�
 - **独立窗口在 Wayland 下显示异常**：pywebview 只是可选项。卸掉它（`uv pip uninstall --python .venv/bin/python pywebview`）后，`lecture gui` 会改用浏览器的应用窗口，这是有保障的方式。
 - **阅读界面的中文标题显示为黑体**：系统缺少中文衬线字体，`lecture doctor` 的“中文字体”一项会给出警告。安装 Noto Serif CJK（见“需要什么”）。
 - **GPU 没被使用**：`lecture doctor --asr-device cuda` 检查 GPU 可见性与运行库；用 `--profile gpu` 安装才会装项目内的 CUDA 运行库。需要正常工作的 NVIDIA 驱动。
+- **录不到声音、结束后提示“没有识别出内容”**：见下面的“录不到声音怎么查”。
 - **笔记没保存、提示目标目录不可写**：内容暂存在 `/tmp`，修复目录后再次运行 `lecture` 的任一子命令即可恢复（见“保存规则”）；这时不要先清空 `/tmp`。
+
+### 录不到声音怎么查
+
+录制中出现“收到的声音几乎没有变化，可能只是噪声”或“还没有听到讲话”，或者下课后提示“这次录制没有识别出任何内容”，按顺序检查：
+
+1. **测试麦克风**：`lecture doctor --mic-test` 录 5 秒，期间正常说几句话。讲话时的峰值比开始时的底噪高出 15 dB 以上算通过；不通过时会列出建议。图形界面的设置 → 麦克风和首次设置的麦克风一步有同样的电平条和“测试”按钮，开始上课的对话框里也有电平条：说句话，电平条应该跟着动。这些都只看电平，不保存也不上传音频；录制进行中不能测试。
+2. **直接录一段听听**，绕开本程序：
+
+   ```sh
+   pw-record --channels 1 /tmp/mic-check.wav   # 说几句话，Ctrl+C 结束
+   pw-play /tmp/mic-check.wav                  # 听不到自己的声音，说明问题在系统或硬件
+   ```
+
+3. **看系统选了哪个输入、是否静音**：`pactl list sources short` 列出输入设备，`pactl list sources` 里看对应设备的 `Mute:` 和 `Volume:`；`wpctl status` 的 Sources 一节标 `*` 的是默认输入。程序里选了别的设备时，在设置 → 麦克风里改回来。
+4. **ALSA 层的开关和增益**：`amixer` 或 `alsamixer`（按 F4 只看录音项），确认 Capture 没有关掉（`[off]`）、增益不是 0。
+5. **ThinkPad 等笔记本的 BIOS 开关**：开机按 F1 进入 BIOS，在 Security → I/O Port Access 里确认 Microphone 是 Enabled。关掉时系统里仍然能看到麦克风设备，但只能收到底噪。
+6. **还是不行，换一个输入**：
+   - 耳机麦克风（3.5 mm 或蓝牙耳机，蓝牙需切到带麦克风的配置）；
+   - USB 麦克风，插上后在设置 → 麦克风里选它；
+   - 用手机录音，课后导入：`lecture start 课程名 --audio-file 录音.m4a`（加 `--fast` 尽快处理）。
 
 ## 开发
 

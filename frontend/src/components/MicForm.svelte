@@ -4,6 +4,7 @@
   import { app, message } from "../lib/state.svelte";
   import type { Devices } from "../lib/types";
   import Choices from "./Choices.svelte";
+  import MicLevel from "./MicLevel.svelte";
   import Select from "./Select.svelte";
 
   let { look = "tabs" }: { look?: "tabs" | "rows" } = $props();
@@ -13,6 +14,9 @@
   let error = $state("");
   // Names survive reboots better than PortAudio indices; an index from lecture setup is kept as is.
   let choice = $state(config.device === null ? "" : String(config.device));
+  // The level bar listens to the saved device (plan GUI-4 Q1.5); a new choice applies once saved.
+  let saved = $state(config.device === null ? "" : String(config.device));
+  let meter = $state<ReturnType<typeof MicLevel>>();
   let autoGain = $state(config.auto_gain ? "on" : "off");
   let options = $derived<ListOption[]>([
     { value: "", label: "系统默认" },
@@ -23,13 +27,17 @@
   api.devices().then((result) => {
     devices = result;
     const byIndex = result.devices.find((d) => String(d.index) === choice);
-    if (byIndex) choice = byIndex.name;
+    if (byIndex) choice = saved = byIndex.name;
   }).catch((e) => (unavailable = message(e)));
 
   export async function save(): Promise<boolean> {
     try {
       await api.saveConfig({ device: choice === "" ? null : choice, auto_gain: autoGain === "on" });
       error = "";
+      if (saved !== choice) {
+        saved = choice;
+        meter?.restart();
+      }
       return true;
     } catch (e) {
       error = message(e);
@@ -47,6 +55,13 @@
     {:else if unavailable}
       <span class="field-note warn-text">{unavailable}；仍可使用系统默认麦克风。</span>
     {/if}
+  </div>
+  <div class="field">
+    <span id="mic-level-{look}">电平</span>
+    <div aria-labelledby="mic-level-{look}" role="group">
+      <MicLevel test bind:this={meter} />
+    </div>
+    {#if saved !== choice}<span class="field-note">电平条显示的是已保存的输入设备，保存后改为新选的设备。</span>{/if}
   </div>
   <div class="field">
     <span class="label">自动调节音量</span>

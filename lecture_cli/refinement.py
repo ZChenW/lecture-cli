@@ -8,7 +8,7 @@ import math
 import time
 from pathlib import Path
 
-from .storage import atomic_text, read_json, write_json
+from .storage import atomic_text, has_content, read_json, write_json
 
 # Default only; each session reads refine_model from its configuration snapshot.
 MODEL = "qwen3-asr-1.7b"
@@ -156,6 +156,9 @@ def refine(directory: Path, transcribe=None, transport=None) -> int:
             write_json(state_path, {"status": stage, "seconds": batch[0][0], **progress})
             for (start, end, pcm), text in zip(batch, transcribe_batch(batch), strict=True):
                 text = text.strip()
+                # Plan GUI-4 Q1.1: punctuation alone is "no text recognized", under the rule below.
+                if not has_content(text):
+                    text = ""
                 # Empty ASR is not evidence of silence. Reject the replacement rather
                 # than silently discard this interval (including the lecture tail).
                 if not text:

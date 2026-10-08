@@ -63,5 +63,6 @@ describe("weak_input in the mic cell (plan N3.4, GUI-3 item 5)", () => {
     expect(weakLabel("还没有听到讲话。如果已经开始上课，请把麦克风靠近讲话人，或调高输入音量")).toBe("还没听到讲话");
     expect(weakLabel("麦克风几乎没有信号，请检查是否选对了麦克风、是否被静音")).toBe("几乎没有信号");
     expect(weakLabel("收到的声音很弱，转录可能不准。请把麦克风靠近讲话人，或调高输入音量")).toBe("声音很弱");
+    expect(weakLabel("收到的声音几乎没有变化，可能只是噪声。请检查麦克风是否正常、是否选对了输入设备")).toBe("可能只是噪声");
   });
 });

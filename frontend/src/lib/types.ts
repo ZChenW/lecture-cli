@@ -66,6 +66,8 @@ export interface Note {
   /** Plan GUI-3 item 4: unticked review points, and all of them. */
   review_count?: number;
   review_total?: number;
+  /** Plan GUI-4 Q1.2: the recording recognised nothing. */
+  empty?: boolean;
 }
 export interface ReviewSource { version: "live" | "refined" | null; first: number; last: number; label: string }
 export interface ReviewItem { id: string; text: string; sources: ReviewSource[]; checked: boolean }
@@ -108,7 +110,11 @@ export interface RunRecord {
   run_id: string; course: string; output: string; status: string; exit_code?: number;
   warnings?: string[]; log?: string | null; log_tail?: string; workspace_kept?: string | null;
   stages?: { name: string; seconds: number }[]; started?: string | null;
-  flags?: { refinement_failed: boolean; refinement_skipped?: boolean; has_fallback: boolean; detail_incomplete: boolean };
+  flags?: { refinement_failed: boolean; refinement_skipped?: boolean; has_fallback: boolean; detail_incomplete: boolean; empty?: boolean };
   audio_seconds?: number | null;
   [key: string]: unknown;
 }
+
+/** Plan GUI-4 Q1.5: GET /api/mic/level, one event every 100 ms. */
+export interface MicLevel { rms: number; peak: number }
+export interface MicTestResult { passed: boolean; floor: number; peak: number; rise: number }

@@ -36,10 +36,11 @@ export function bannerItems(asr: Snapshot["asr"]): Notice[] {
 }
 
 /** The mic cell's short word for the weak_input field: the start-of-recording notices (plan GUI-3
- *  item 5) share it with the weak-input one (plan N3.4). */
+ *  item 5) and the steady-noise one (plan GUI-4 Q1.4) share it with the weak-input one (plan N3.4). */
 export function weakLabel(text: string): string {
   if (text.startsWith("还没有听到讲话")) return "还没听到讲话";
   if (text.startsWith("麦克风几乎没有信号")) return "几乎没有信号";
+  if (text.startsWith("收到的声音几乎没有变化")) return "可能只是噪声";  // Plan GUI-4 Q1.4
   return "声音很弱";
 }
 

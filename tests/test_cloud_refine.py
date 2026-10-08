@@ -188,7 +188,9 @@ def test_hallucination_filter_and_repetition_marker_are_api_captures(tmp_path):
 @pytest.mark.parametrize("reply", [
     {"text": ""}, {"text": "   "},
     # Everything filtered as non-speech: a voiced segment came back empty.
-    {"segments": [dict(start=0, end=1, text="谢谢观看", no_speech_prob=0.9, avg_logprob=-2.0)]}])
+    {"segments": [dict(start=0, end=1, text="谢谢观看", no_speech_prob=0.9, avg_logprob=-2.0)]},
+    # Plan GUI-4 Q1.1: punctuation alone is no text either.
+    {"text": "."}, {"segments": [dict(start=0, end=1, text="。"), dict(start=1, end=2, text="…")]}])
 def test_voiced_segment_with_empty_result_falls_back(tmp_path, reply):
     session(tmp_path)
     archive(tmp_path, voiced(50))

@@ -15,6 +15,14 @@ START_SECONDS = 30
 SILENT_DBFS = -70.0
 NO_SPEECH = "还没有听到讲话。如果已经开始上课，请把麦克风靠近讲话人，或调高输入音量"
 NO_SIGNAL = "麦克风几乎没有信号，请检查是否选对了麦克风、是否被静音"
+# Plan GUI-4 Q1.4: a microphone that delivers only steady noise (incident 1: about -32 dBFS that
+# barely moved for 9 minutes). Per-second RMS over 30 s of fed audio, pauses excluded.
+STILL_SECONDS = 30
+STILL_RANGE_DB = 3.0      # max - min of the 30 per-second levels below this is "no change"
+STILL_MEAN_DBFS = -45.0   # ... and their mean above this: there is signal, it just never moves
+STILL_CLEAR_DB = 6.0      # a later 30 s whose levels span this much clears the notice
+FLOOR_DBFS = -120.0       # what digital silence counts as, so the levels stay finite
+STILL = "收到的声音几乎没有变化，可能只是噪声。请检查麦克风是否正常、是否选对了输入设备"
 
 
 class WeakInput:
@@ -51,12 +59,19 @@ class WeakInput:
         self.uncounted = 0        # weak windows of this stretch not yet matched with confirmed text
         self.counted_upto = 0     # confirmed segments already matched with weak windows
         self.streak_seconds = 0   # matched weak time of this stretch, kept only if it raises the notice
+        self.still = ""           # plan GUI-4 Q1.4: steady noise and no text
+        self.still_count = 0      # confirmed segments when the still notice was raised
+        self.second_squares = 0.0
+        self.second_samples = 0
+        self.second_count = 0     # confirmed segments when the current second began
+        self.levels = []          # (dBFS, confirmed segments when that second began), the last 30 s
 
     def add(self, pcm: bytes, confirmed: int) -> bool:
         """Account s16le mono audio; confirmed is the transcript's segment count. True if notice or seconds changed."""
         import numpy as np  # Lazily: the controller imports this module only for summary().
         data = np.frombuffer(pcm, dtype="<i2").astype(np.float64) / 32768
         changed = self.check_start(data, confirmed)
+        changed |= self.check_still(data, confirmed)
         while data.size:
             if self.samples == 0:
                 self.window_count = confirmed
@@ -93,6 +108,36 @@ class WeakInput:
     def pause(self) -> None:
         # Audio before and after a break is not one continuous stretch: drop the partial window.
         self.squares, self.samples = 0.0, 0
+        self.second_squares, self.second_samples = 0.0, 0
+
+    def check_still(self, data, confirmed: int) -> bool:
+        """Plan GUI-4 Q1.4: 30 s of per-second levels that hardly move, above -45 dBFS on average,
+        with no new confirmed text: probably only noise. New text, or a later 30 s spanning 6 dB or
+        more, clears it."""
+        before = self.notice
+        if self.still and confirmed > self.still_count:
+            self.still = ""
+        while data.size:
+            if self.second_samples == 0:
+                self.second_count = confirmed
+            part, data = data[:SAMPLE_RATE - self.second_samples], data[SAMPLE_RATE - self.second_samples:]
+            self.second_squares += float(part @ part)
+            self.second_samples += part.size
+            if self.second_samples < SAMPLE_RATE:
+                break
+            rms = (self.second_squares / self.second_samples) ** 0.5
+            self.second_squares, self.second_samples = 0.0, 0
+            self.levels = (self.levels + [(20 * math.log10(rms) if rms > 0 else FLOOR_DBFS, self.second_count)])[-STILL_SECONDS:]
+            if len(self.levels) < STILL_SECONDS:
+                continue
+            values = [level for level, _ in self.levels]
+            spread = max(values) - min(values)
+            if self.still and spread >= STILL_CLEAR_DB:
+                self.still = ""
+            elif (not self.still and spread < STILL_RANGE_DB and sum(values) / len(values) > STILL_MEAN_DBFS
+                  and confirmed == self.levels[0][1]):
+                self.still, self.still_count = STILL, confirmed
+        return self.notice != before
 
     def check_start(self, data, confirmed: int) -> bool:
         before = self.notice
@@ -110,8 +155,9 @@ class WeakInput:
 
     @property
     def notice(self) -> str:
-        """What the GUI shows; the weak-input notice needs confirmed text, which clears the start one."""
-        return self.weak or self.start
+        """What the GUI shows; the weak-input notice needs confirmed text, which clears the start one.
+        Steady noise (plan GUI-4 Q1.4) comes first: it explains the other two."""
+        return self.still or self.weak or self.start
 
     def set(self, notice: str) -> bool:
         before = self.notice

@@ -11,7 +11,7 @@ import pytest
 
 from lecture_cli import api_capture, capture
 from lecture_cli.gui import sessions
-from lecture_cli.input_level import NO_SIGNAL, NO_SPEECH, NOTICE, WeakInput, summary
+from lecture_cli.input_level import NO_SIGNAL, NO_SPEECH, NOTICE, STILL, WeakInput, summary
 from lecture_cli.storage import read_json, write_json
 
 
@@ -281,5 +281,6 @@ def test_the_recording_screen_names_each_notice_by_its_opening_words():
     notice text changes here, the microphone cell would fall back to "声音很弱"."""
     source = (Path(__file__).resolve().parents[1] / "frontend/src/lib/format.ts").read_text()
     prefixes = re.findall(r'text\.startsWith\("([^"]+)"\)', source)
-    assert len(prefixes) == 2
+    assert len(prefixes) == 3
     assert NO_SPEECH.startswith(prefixes[0]) and NO_SIGNAL.startswith(prefixes[1])
+    assert STILL.startswith(prefixes[2])  # Plan GUI-4 Q1.4
