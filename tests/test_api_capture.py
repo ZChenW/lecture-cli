@@ -197,7 +197,8 @@ def test_audio_file_end_to_end_with_mock_service(tmp_path):
     state = read_json(tmp_path / "asr-state.json")
     assert state["status"] == "转录完成"
     assert state["seconds"] == state["captured"] == 61
-    assert state["queued"] == state["lag"] == 0
+    # lag is a float difference of second counts; it can end at 7e-15 rather than 0.
+    assert state["queued"] == 0 and state["lag"] == pytest.approx(0, abs=1e-6)
     assert state["pending"] == state["buffer"] == ""
     assert state["count"] == 3 and state["asr_device"] == "api"
     assert not (tmp_path / "refinement.pcm").exists()
