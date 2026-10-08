@@ -58,12 +58,30 @@ def workspace(tmp_path, levels, live, refined=None, captured=None):
 
 # --- Q3.3 the rules --------------------------------------------------------------------------------
 
-def test_reference_is_the_median_of_windows_with_live_text():
-    levels = windows((6, -20), (3, -30), (3, -60))
+def test_reference_is_the_80th_percentile_of_windows_with_live_text():
+    levels = windows((4, -20), (5, -30), (3, -60))
     live = every(0, 90, "讲")  # text in the first nine windows only
     reference, spans = weak_spans.find_spans(levels, live, None)
-    assert reference == -20.0  # median of six at -20 and three at -30
+    assert reference == -20.0  # the median of four at -20 and five at -30 would be -30
     assert spans == []  # the -60 windows have no text in them
+    assert weak_spans.percentile([1, 2, 3, 4, 5], 80) == pytest.approx(4.2)
+    assert weak_spans.percentile([7], 80) == 7
+
+
+def test_absolute_floor_marks_windows_with_text_below_minus_40_dbfs():
+    # A quiet lecture: reference -40.1, so the relative rule would need -55.1 and marks nothing.
+    levels = windows((6, -45), (2, -40.0), (2, -40.1), (2, -45))
+    live = every(0, 120, "讲")
+    reference, spans = weak_spans.find_spans(levels, live, None)
+    assert reference == -40.1
+    # -40.0 is not below the floor; every window from 80 s on is, and each holds text.
+    assert spans == [{"start": 0.0, "end": 60.0}, {"start": 80.0, "end": 120.0}]
+    # Without text in a window the floor does not apply to it.
+    assert weak_spans.find_spans(windows((6, -20), (3, -45)), every(0, 60, "讲"), None)[1] == []
+    # Fewer than six reference windows: no relative rule, but the floor still marks text.
+    short = windows((3, -20), (3, -50))
+    live = every(0, 20, "讲") + every(30, 60, "弱", first_id=3)  # five windows with text
+    assert weak_spans.find_spans(short, live, None) == (None, [{"start": 30.0, "end": 60.0}])
 
 
 def test_fewer_than_six_reference_windows_give_no_judgement():
@@ -143,10 +161,13 @@ def test_review_entry_gives_both_versions_when_the_refined_one_is_used(tmp_path)
     journal.render(finished=True)
     journal.close()
     review = attachment_path(Path(directory / "notes.md"), "review").read_text()
-    assert ("- 这一段收音很弱，待核对 [refined-L2](notes.transcript.md#refined-L2)："
-            "校正版本：在这一条件下，产值很低。／实时版本：在这严重监督下 羼水也很为难") in review
+    assert ("- **这一段收音很弱，待核对：2:00–3:00** [refined-L2](notes.transcript.md#refined-L2)\n"
+            "  - 校正版本：在这一条件下，产值很低。\n"
+            "  - 实时版本：在这严重监督下 羼水也很为难\n") in review
     points, notices = checklist.parse(review)
-    assert len(points) == 1 and "校正版本" in points[0]
+    assert points == ["**这一段收音很弱，待核对：2:00–3:00** [refined-L2](notes.transcript.md#refined-L2)\n"
+                      "- 校正版本：在这一条件下，产值很低。\n- 实时版本：在这严重监督下 羼水也很为难"]
+    assert checklist.sources_of(points[0]) == [{"version": "refined", "first": 2, "last": 2, "label": "L2"}]
     assert notices == ["## 处理提示\n\n2:00–3:00 收音很弱，相关内容已标为待核对。"]
     assert "> 记录提示：2:00–3:00 收音很弱，相关内容已标为待核对。" in (directory / "notes.md").read_text()
     # The transcript attachment keeps both versions unmarked.
@@ -161,17 +182,95 @@ def test_review_entry_with_the_live_version_only(tmp_path):
     journal.render(finished=True)
     journal.close()
     review = attachment_path(Path(directory / "notes.md"), "review").read_text()
-    assert "- 这一段收音很弱，待核对 [live-L13](notes.transcript.md#live-L13)：实时版本：在这严重监督下" in review
-    assert "- 这一段收音很弱，待核对 [live-L14](notes.transcript.md#live-L14)：实时版本：羼水也很为难" in review
-    assert "校正版本" not in review and review.count("收音很弱，待核对") == 2
+    # GUI-4 fix: the two marked segments of the span are one point, not two.
+    assert ("- **这一段收音很弱，待核对：2:00–3:00** [live-L13–L14](notes.transcript.md#live-L13)\n"
+            "  - 实时版本：在这严重监督下 羼水也很为难\n") in review
+    assert "校正版本" not in review and len(checklist.parse(review)[0]) == 1
 
 
-@pytest.mark.parametrize("live_text,expected", [("在这一条件下，产值很低。", "校正版本与实时版本相同：在这一条件下，产值很低。"),
-                                                (None, "校正版本：在这一条件下，产值很低。")])
-def test_one_text_when_the_versions_agree_or_live_has_none(live_text, expected):
-    record = seg(2, 120, 180, PREFIX + "在这一条件下，产值很低。")
+@pytest.mark.parametrize("live_text,expected", [
+    ("在这一条件下，产值很低。", "  - 校正版本与实时版本相同：在这一条件下，产值很低。"),
+    (None, "  - 校正版本：在这一条件下，产值很低。\n  - 实时版本：（这一段没有文字）"),
+])
+def test_one_text_when_the_versions_agree_and_a_placeholder_when_live_has_none(live_text, expected):
+    final = [seg(2, 120, 180, PREFIX + "在这一条件下，产值很低。")]
     live = [seg(1, 125, 135, live_text)] if live_text else []
-    assert weak_spans.review_line(record, "refined", live) == f"- 这一段收音很弱，待核对 [L2]：{expected}"
+    item = weak_spans.review_item({"start": 120, "end": 180}, final, "refined", live, "n.transcript.md")
+    assert item == f"- **这一段收音很弱，待核对：2:00–3:00** [L2]\n{expected}"
+
+
+def test_a_span_refinement_left_empty_is_still_one_point_citing_the_live_segments():
+    live = [seg(7, 121, 130, "弱一"), seg(8, 131, 140, "弱二"), seg(10, 150, 160, "弱三")]
+    final = [seg(1, 0, 118, "前面。"), seg(2, 182, 240, "后面。")]
+    item = weak_spans.review_item({"start": 120, "end": 180}, final, "refined", live, "n 1.transcript.md")
+    assert item == ("- **这一段收音很弱，待核对：2:00–3:00** [live-L7–L8](n%201.transcript.md#live-L7) "
+                    "[live-L10](n%201.transcript.md#live-L10)\n"
+                    "  - 校正版本：（这一段没有文字）\n  - 实时版本：弱一 弱二 弱三")
+    points, _ = checklist.parse("# 待核对与处理记录\n\n" + item + "\n")
+    assert [s["label"] for s in checklist.sources_of(points[0])] == ["L7–L8", "L10"]
+
+
+def test_the_live_text_covers_the_refined_segments_beyond_the_span():
+    """A refined segment that runs past the span: the live text is taken over the same stretch."""
+    final = [seg(3, 110, 175, PREFIX + "校正写的。"), seg(4, 176, 200, PREFIX + "后半。")]
+    live = [seg(20, 100, 108, "之前"), seg(21, 111, 119, "跨进来"), seg(22, 150, 160, "中间"), seg(23, 190, 199, "超出")]
+    item = weak_spans.review_item({"start": 120, "end": 180}, final, "refined", live, "x.md")
+    assert item.endswith("  - 校正版本：校正写的。 后半。\n  - 实时版本：跨进来 中间 超出")
+    assert "[L3–L4]" in item.splitlines()[0]
+
+
+def merged_review(tmp_path, refined=True):
+    """Two weak spans with several segments each; refined and live versions differ in every span."""
+    levels = windows((6, -22), (6, -52), (6, -22), (3, -52), (6, -22))
+    live = (every(0, 60, "正常") + [seg(7, 62, 70, "弱甲一"), seg(8, 75, 85, "弱甲二"), seg(9, 95, 110, "弱甲三")]
+            + every(120, 180, "中间", first_id=10) + [seg(16, 182, 195, "弱乙一"), seg(17, 196, 209, "弱乙二")]
+            + every(210, 270, "最后", first_id=18))
+    live = [{**r, "text": r["text"] + " 待核对" if r["id"] == 12 else r["text"]} for r in live]
+    ref = [seg(1, 0, 59, "开头。"), seg(2, 60, 89, "甲段校正一。"), seg(3, 90, 119, "甲段校正二。"),
+           seg(4, 120, 179, "中间校正。"), seg(5, 180, 209, "乙段校正。"), seg(6, 210, 270, "结尾。")]
+    if refined:
+        ref[3] = {**ref[3], "text": "中间校正，[疑似重复，待核对] 这一句。"}
+    return workspace(tmp_path, levels, live, ref if refined else None, captured=270)
+
+
+@pytest.mark.parametrize("refined", [True, False])
+def test_one_point_per_span_matching_the_prefixed_segments(tmp_path, refined):
+    directory = merged_review(tmp_path, refined)
+    hints = weak_spans.analyse(directory)
+    assert hints == ["1:00–2:00、3:00–3:30 收音很弱，相关内容已标为待核对。"]
+    journal = Journal(directory)
+    for hint in hints:
+        journal.add_warning(hint)
+    journal.render(finished=True)
+    journal.close()
+    review_path = attachment_path(Path(directory / "notes.md"), "review")
+    points = checklist.parse(review_path.read_text())[0]
+    weak = [p for p in points if p.startswith("**这一段收音很弱")]
+    other = [p for p in points if not p.startswith("**这一段收音很弱")]
+    assert [p.splitlines()[0].split("**")[1] for p in weak] == ["这一段收音很弱，待核对：1:00–2:00",
+                                                                "这一段收音很弱，待核对：3:00–3:30"]
+    # The other 待核对 segment (outside every span) keeps its own point, in time order between them.
+    assert len(other) == 1 and points.index(other[0]) == 1 and "未确认的转录" in other[0]
+    # Every segment carrying the prefix in the notes input is cited by exactly the span's point.
+    version = "refined" if refined else "live"
+    prefixed = {r["id"] for r in final_events(directory) if r["text"].startswith(PREFIX)}
+    cited = {i for p in weak for s in checklist.sources_of(p) if s["version"] == version
+             for i in range(s["first"], s["last"] + 1)}
+    assert prefixed == cited == ({2, 3, 5} if refined else {7, 8, 9, 16, 17})
+    if refined:
+        assert "  - 校正版本：甲段校正一。 甲段校正二。\n  - 实时版本：弱甲一 弱甲二 弱甲三\n" in review_path.read_text()
+    else:
+        assert "  - 实时版本：弱甲一 弱甲二 弱甲三\n" in review_path.read_text()
+    # GUI-3 review state: stable ids across renders, one tick per span, counts per point.
+    first = checklist.items(review_path)
+    journal = Journal(directory)
+    journal.render(finished=True)
+    journal.close()
+    assert checklist.items(review_path) == first
+    ids = [item["id"] for item in first["items"]]
+    assert len(set(ids)) == 3 and ids[0] == checklist.item_id(weak[0])
+    checklist.save_checked(review_path, [ids[0]])
+    assert checklist.counts(review_path) == (2, 3)
 
 
 def test_final_notes_receive_the_prefix_and_the_prompt_says_what_to_do(tmp_path):
@@ -235,11 +334,16 @@ def incident(tmp_path, variant):
 
     -40 dB: live recognised nothing in the weak parts; refinement rewrote the last part into text
     that is not in the original. -30 dB: live caught fragments in the first weak part; refinement
-    dropped that part entirely."""
-    weak = {"-40": -58.0, "-30": -49.0}[variant]
+    dropped that part entirely. "-30 whisper": the reviewer's run (GUI-4 fix) — live Whisper
+    transcribed both weak parts throughout, so weak windows with text are two thirds of the
+    reference windows and their median is the weak level itself."""
+    weak = {"-40": -58.0, "-30": -49.0, "-30 whisper": -53.0}[variant]
     levels = windows((6, weak), (6, -23), (6, weak))
     normal = every(60, 120, "正常朗读", step=5, first_id=1)
-    if variant == "-40":
+    if variant == "-30 whisper":
+        live = every(0, 180, "朗读", step=10)
+        refined = [seg(1, 0, 58, "开头一段校正。"), seg(2, 60, 118, "中间正常朗读的校正。"), seg(3, 120, 178, "最后一段校正。")]
+    elif variant == "-40":
         live = normal
         refined = [seg(1, 2, 58, "开头一段校正。"), seg(2, 60, 120, "中间正常朗读的校正。"),
                    seg(3, 121, 178, "在这一条件下，产值很低……便改与专管工钱的李寡妇了。")]
@@ -251,7 +355,7 @@ def incident(tmp_path, variant):
     return workspace(tmp_path, levels, live, refined, captured=180)
 
 
-@pytest.mark.parametrize("variant", ["-40", "-30"])
+@pytest.mark.parametrize("variant", ["-40", "-30", "-30 whisper"])
 def test_incident_two_marks_both_weak_parts_and_not_the_middle(tmp_path, variant):
     directory = incident(tmp_path, variant)
     hints = weak_spans.analyse(directory)
@@ -266,16 +370,52 @@ def test_incident_two_marks_both_weak_parts_and_not_the_middle(tmp_path, variant
     journal.render(finished=True)
     journal.close()
     review = attachment_path(Path(directory / "notes.md"), "review").read_text()
-    assert review.count("这一段收音很弱，待核对") == len(final) - len(middle)
+    # One point per weak part (GUI-4 fix), however many segments each one marked.
+    points = checklist.parse(review)[0]
+    assert [p.splitlines()[0].split("**")[1] for p in points] == ["这一段收音很弱，待核对：0:00–1:00",
+                                                                  "这一段收音很弱，待核对：2:00–3:00"]
+    cited = {i for p in points for s in checklist.sources_of(p) for i in range(s["first"], s["last"] + 1)
+             if s["version"] == "refined"}
+    assert cited == {r["id"] for r in final if r not in middle}
 
 
-def test_incident_two_at_its_original_length_is_not_judged(tmp_path):
-    """60 s: two normal windows only, below the plan's minimum of six. Nothing is marked."""
+def test_the_reviewers_case_needs_the_new_rules(tmp_path):
+    """3 min, weak/normal/weak at -30 dB, all transcribed live: the old median rule marked nothing.
+    Each new rule marks both weak parts on its own."""
+    directory = incident(tmp_path, "-30 whisper")
+    levels = weak_spans.load_levels(directory)
+    live = events(directory)
+    reference = [w["rms_dbfs"] for w in levels]  # every window holds live text here
+    assert sum(r == -53.0 for r in reference) == 12 and len(reference) == 18
+    assert weak_spans.percentile(reference, 50) == -53.0  # the old reference: nothing is 15 dB below it
+    assert weak_spans.find_spans(levels, live, None)[0] == -23.0
+    expected = [{"start": 0.0, "end": 60.0}, {"start": 120.0, "end": 180.0}]
+    louder = [{**w, "rms_dbfs": w["rms_dbfs"] + 20} for w in levels]  # -33 / -3: above the floor
+    assert weak_spans.find_spans(louder, live, None) == (-3.0, expected)  # the percentile alone
+    quieter = [{**w, "rms_dbfs": -45.0 if w["rms_dbfs"] == -23.0 else -53.0} for w in levels]
+    assert weak_spans.find_spans(quieter, live, None) == (-45.0, [{"start": 0.0, "end": 180.0}])  # the floor alone
+
+
+def test_weak_parts_beyond_a_fifth_of_the_reference_are_left_to_the_floor():
+    """The percentile keeps the normal level only while normal windows are at least a fifth of the
+    windows with live text; past that, only the -40 dBFS floor can still mark the weak parts."""
+    live = every(0, 360, "讲")
+    above_floor = windows((30, -38), (6, -8))  # five weak minutes at -38, one normal at -8
+    assert weak_spans.find_spans(above_floor, live, None) == (-38.0, [])
+    below_floor = windows((30, -48), (6, -18))
+    assert weak_spans.find_spans(below_floor, live, None)[1] == [{"start": 0.0, "end": 300.0}]
+
+
+def test_incident_two_at_its_original_length_is_marked_by_the_floor_only(tmp_path):
+    """60 s: two normal windows only, below the minimum of six, so there is no reference. The floor
+    still marks the weak part that holds text (the rewritten ending); the opening weak part has no
+    text in either version and is not marked."""
     levels = windows((2, -58), (2, -23), (2, -58))
     directory = workspace(tmp_path, levels, every(20, 40, "正常", step=5),
                           [seg(1, 41, 59, "便改与专管工钱的李寡妇了。")], captured=60)
-    assert weak_spans.analyse(directory) == []
-    assert read_json(directory / "weak-spans.json") == {"reference_dbfs": None, "spans": [], "gaps": []}
+    assert weak_spans.analyse(directory) == ["0:40–1:00 收音很弱，相关内容已标为待核对。"]
+    assert read_json(directory / "weak-spans.json") == {"reference_dbfs": None,
+                                                         "spans": [{"start": 40.0, "end": 60.0}], "gaps": []}
 
 
 # --- worker and controller hand-off -----------------------------------------------------------------
@@ -344,7 +484,7 @@ def test_controller_lists_the_spans_instead_of_the_total(stub_runtime, isolated_
         review = attachment_path(note, "review").read_text()
         assert "> 记录提示：2:00–3:00 收音很弱，相关内容已标为待核对。" in note.read_text()
         assert "累计约" not in note.read_text() + review
-        assert "- 这一段收音很弱，待核对 [live-L13]" in review
+        assert "- **这一段收音很弱，待核对：2:00–3:00** [live-L13]" in review
         assert not directory.exists()
     finally:
         if proc.poll() is None:

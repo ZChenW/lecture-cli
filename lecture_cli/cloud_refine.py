@@ -32,11 +32,16 @@ CJK = r"[\u3000-\u303f\u3400-\u9fff\uf900-\ufaff\uff00-\uffef]"
 FULL_WIDTH = str.maketrans(",.?!:;", "，。？！：；")
 # Plan GUI-3 item 7: a half-width mark with Chinese on at least one side; never a run of dots.
 HALF_WIDTH = re.compile(rf"(?:(?<={CJK})|(?=[,.?!:;]{CJK}))(?:[,?!:;]|(?<!\.)\.(?!\.)) *")
+# GUI-4 fix: Whisper sometimes writes the small ideographic comma (U+FE51); it is Chinese wherever
+# it appears, so it becomes a full-width comma without looking at its neighbours.
+SMALL_COMMA = re.compile("\ufe51 *")
 
 
 def full_width(text: str) -> str:
     """Chinese punctuation where Whisper wrote ASCII marks next to Chinese; English and numbers
-    (3.14, e.g., 10:30) are left alone. A space after a converted mark goes with it."""
+    (3.14, e.g., 10:30) are left alone. A space after a converted mark goes with it. "﹑" (U+FE51)
+    always becomes "，"."""
+    text = SMALL_COMMA.sub("，", text)
     return HALF_WIDTH.sub(lambda m: m[0].strip().translate(FULL_WIDTH), text)
 
 

@@ -258,13 +258,16 @@ class Journal:
         for key, value in info.items():
             if key.startswith("review:") and value:
                 review.append(linked_sources(value, transcript_path.name, version))
-        from .weak_spans import MARK, review_line
-        for record in final_events(self.directory):
-            if MARK in record["text"]:
-                # Plan GUI-4 Q3.4: the text of both versions, so the reader can compare them here.
-                review.append(linked_sources(review_line(record, version, live_records), transcript_path.name, version))
-            elif "待核对" in record["text"]:
-                review.append(linked_sources(f"- 未确认的转录 [L{record['id']}]", transcript_path.name, version))
+        from .weak_spans import PREFIX, interval, review_items
+        final = final_events(self.directory)
+        # GUI-4 fix: one point per weak span (time range, both versions in full) instead of one per
+        # segment; the segments it covers are exactly the ones carrying PREFIX in the notes input.
+        points = review_items(self.directory, final, version, live_records, transcript_path.name)
+        for record in final:
+            if "待核对" in record["text"] and not record["text"].startswith(PREFIX):
+                points.append(((interval(record) or (0.0,))[0], f"- 未确认的转录 [L{record['id']}]"))
+        for _, point in sorted(points, key=lambda p: p[0]):
+            review.append(linked_sources(point, transcript_path.name, version))
         for line in live.splitlines():
             if "待核对" in line:
                 review.append(linked_sources(line, transcript_path.name, "live"))
