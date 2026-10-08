@@ -190,7 +190,8 @@ def test_write_failure_disables_gain_without_aborting_recording():
 @pytest.mark.parametrize("missing", [False, True])
 def test_backends_adjust_outside_callback_and_persist_notice(tmp_path, monkeypatch, fake_wpctl, backend, missing):
     write_json(tmp_path / "session.json", dict(language="en", asr_model="base.en",
-               asr_api_base="https://example.invalid/v1", asr_api_model="test", auto_gain=True))
+               asr_api_base="https://example.invalid/v1", asr_api_model="test", auto_gain=True,
+               refine=backend == "local"))
     monkeypatch.setenv("LECTURE_ASR_API_KEY", "fake-key")
     if missing:
         def unavailable(*args, **kwargs):
@@ -198,6 +199,15 @@ def test_backends_adjust_outside_callback_and_persist_notice(tmp_path, monkeypat
         monkeypatch.setattr(mic_gain.subprocess, "run", unavailable)
     producer = None
     eof = asyncio.Event()
+    recognised = []
+    # PLAN-GUI-5 R2.1: the stream first serves the start calibration; it is over when the listener closes.
+    calibrated = threading.Event()
+    close = mic_gain.Listener.close
+
+    def closing(self):
+        close(self)
+        calibrated.set()
+    monkeypatch.setattr(mic_gain.Listener, "close", closing)
 
     class Processor:
         def __init__(self, **kwargs): pass
@@ -207,6 +217,7 @@ def test_backends_adjust_outside_callback_and_persist_notice(tmp_path, monkeypat
                 if False: yield None
             return results()
         async def process_audio(self, pcm):
+            recognised.append(len(pcm))
             if not pcm:
                 eof.set()
         async def cleanup(self): pass
@@ -216,15 +227,26 @@ def test_backends_adjust_outside_callback_and_persist_notice(tmp_path, monkeypat
         def start(self):
             nonlocal producer
             producer = asyncio.create_task(self.produce())
+        def feed(self, value):
+            thread = threading.Thread(target=self.callback, args=(
+                np.full((8000, 1), value, dtype=np.float32), 8000, None, SimpleNamespace(input_overflow=False)))
+            thread.start()
+            thread.join()
         async def produce(self):
             try:
+                if not missing:
+                    # 1 s of quiet background (-60 dBFS): nothing to lower, and none of it is recorded.
+                    for _ in range(2):
+                        self.feed(0.001)
+                    for _ in range(100):
+                        if calibrated.is_set():
+                            break
+                        await asyncio.sleep(0.02)
+                    assert calibrated.is_set(), "the start calibration never finished"
+                    await asyncio.sleep(0.05)
                 for window in range(3):
                     for _ in range(4):
-                        thread = threading.Thread(target=self.callback, args=(
-                            np.ones((8000, 1), dtype=np.float32), 8000, None,
-                            SimpleNamespace(input_overflow=False)))
-                        thread.start()
-                        thread.join()
+                        self.feed(1.0)
                     await asyncio.sleep(0.15)
                     state = read_json(tmp_path / "asr-state.json")
                     if missing:
@@ -252,11 +274,23 @@ def test_backends_adjust_outside_callback_and_persist_notice(tmp_path, monkeypat
         await producer
     asyncio.run(asyncio.wait_for(exercise(), 5))
     state = read_json(tmp_path / "asr-state.json")
+    # Only the six clipping seconds count: the calibration second never reached the duration,
     assert state["status"] == "转录完成" and state["captured"] == 6
+    if backend == "local":
+        # ... recognition or the refinement archive.
+        assert sum(recognised) == 6 * 16000 * 2
+        assert (tmp_path / "refinement.pcm").stat().st_size == 6 * 16000 * 2
+    assert calibrated.is_set() is not missing
     if not missing:
         assert fake_wpctl.volume == pytest.approx(0.85 * mic_gain.GAIN_STEP, abs=1e-6)
         assert "85% → 68%" in state["gain_notice"]
         assert state["gain_change"] == {"id": 1, "text": "刚才声音过大，麦克风音量已从 85% 调到 68%"}
+        # PLAN-GUI-5 R2.1/R2.2: the bottom bar's volume; the lowering took the ceiling down with it.
+        assert state["mic_volume"] == pytest.approx(0.85 * mic_gain.GAIN_STEP, abs=1e-6)
+        assert state["mic_ceiling"] == pytest.approx(0.85 * mic_gain.GAIN_STEP, abs=1e-6)
+        assert state["mic_node"] == "alsa_input.fake-test-mic" and "mic_verdict" not in state
+    else:
+        assert "mic_volume" not in state
 
 
 def test_display_shows_microphone_notice(tmp_path):

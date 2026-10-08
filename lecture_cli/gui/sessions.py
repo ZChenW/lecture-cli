@@ -5,6 +5,7 @@ from collections import deque
 from datetime import datetime
 import json
 import os
+import math
 import re
 from pathlib import Path
 import sqlite3
@@ -220,6 +221,12 @@ def gain_change(value):
     return None
 
 
+def mic_volume(value):
+    if isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value) and 0 <= value <= 1.5:
+        return round(float(value), 4)
+    return None
+
+
 def snapshot(directory: Path, cache: SnapshotCache | None = None) -> dict:
     """The only session shape the frontend depends on; field meanings follow cli.display()."""
     cache = cache or SnapshotCache()
@@ -273,6 +280,10 @@ def snapshot(directory: Path, cache: SnapshotCache | None = None) -> dict:
             # Plan GUI-4 Q2.3: the latest automatic volume change, a dismissible banner; id tells a
             # repeated text apart, so the same change happening again shows again.
             "gain_change": gain_change(asr.get("gain_change")),
+            # PLAN-GUI-5 R2.1: the volume automatic adjustment keeps now (the bottom bar's "22% · 自动"),
+            # and R2.3's verdict when the microphone looks dead after it.
+            "mic_volume": mic_volume(asr.get("mic_volume")),
+            "mic_verdict": asr.get("mic_verdict") if isinstance(asr.get("mic_verdict"), str) and asr.get("mic_verdict") else None,
         },
         "transcript": {
             "count": cache.transcript.count,

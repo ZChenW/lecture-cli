@@ -16,7 +16,9 @@ def test_record_does_not_abort_on_backpressure_or_single_host_overflow(tmp_path,
     whisperlivekit = SimpleNamespace(TranscriptionEngine=None, AudioProcessor=None)
     monkeypatch.setitem(sys.modules, "sounddevice", sounddevice)
     monkeypatch.setitem(sys.modules, "whisperlivekit", whisperlivekit)
-    write_json(tmp_path / 'session.json', dict(asr_model='base.en', language='en', refine=True))
+    # auto_gain off: this one-shot fake stream would otherwise be taken by the start calibration
+    # (PLAN-GUI-5 R2.1), which tests/test_mic_volume_auto.py covers.
+    write_json(tmp_path / 'session.json', dict(asr_model='base.en', language='en', refine=True, auto_gain=False))
     fed = []
     eof = asyncio.Event()
     class Processor:

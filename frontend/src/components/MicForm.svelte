@@ -63,10 +63,10 @@
     </div>
   </div>
   <div class="field">
-    <span class="label">自动调节音量</span>
-    <Choices label="自动调节音量" bind:value={autoGain} options={[
-      { value: "on", title: "开", tip: "只对系统默认输入生效" },
-      { value: "off", title: "关", tip: "不改动系统音量" },
+    <span class="label">自动调节麦克风音量</span>
+    <Choices label="自动调节麦克风音量" bind:value={autoGain} options={[
+      { value: "on", title: "开" },
+      { value: "off", title: "关" },
     ]} />
   </div>
   {#if error}<p class="error-text" role="alert">{error}</p>{/if}

@@ -101,7 +101,7 @@
     <!-- Plan GUI-4 Q1.5: whether the microphone hears anything, before the lecture starts. -->
     <div class="line first mic">
       <span id="start-mic" class="name">麦克风</span>
-      <div class="cell meter-cell" role="group" aria-labelledby="start-mic"><MicLevel passive bind:this={meter} /></div>
+      <div class="cell meter-cell" role="group" aria-labelledby="start-mic"><MicLevel bind:this={meter} /></div>
     </div>
     <div class="line">
       <span id="start-language" class="name">语言</span>

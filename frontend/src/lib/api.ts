@@ -76,7 +76,7 @@ export const api = {
   startRun: (course: string, overrides: Record<string, unknown> = {}) =>
     send<Snapshot>("POST", "/api/runs", { course, overrides }),
   activeRun: () => get<Snapshot | null>("/api/runs/active"),
-  control: (action: "pause" | "resume" | "stop" | "skip-refine" | "discard") =>
+  control: (action: "pause" | "resume" | "stop" | "skip-refine" | "discard" | "dismiss-still") =>
     send<Snapshot>("POST", `/api/runs/active/${action}`),
   runs: () => get<RunRecord[]>("/api/runs"),
   notes: (course: string) => get<Note[]>(`/api/notes?${query({ course })}`),

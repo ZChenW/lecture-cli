@@ -1,30 +1,63 @@
-"""Lower the PipeWire default source gain when captured audio clips, and raise it back later.
+"""Keep the PipeWire default source volume where the classroom sounds right, without any button.
 
-Plan GUI-4 Q2: a single clipping window (a tap on the desk) never lowers the volume; two in a row do,
-by 6 dB. After a lowering in this run the volume may come back up by 6 dB, never above the start
-value, once 3 minutes have passed since the last change without any clipping window and the
-recording is in the weak-input state. A lowering within 60 s of a raise locks the volume down for
-the rest of the run. All time is recorded audio, so pauses never count.
+PLAN-GUI-5 R2 replaces the fourth round's "lower only, raise back to the start value":
+
+- R2.1, before any audio reaches recognition: lower the volume in 6 dB steps until a short
+  background measurement neither clips nor exceeds BACKGROUND_TARGET. That volume is the run's
+  ceiling. The audio heard meanwhile is never recognised, counted or archived.
+- R2.2, during the lecture: two consecutive 2 s clipping windows lower it by 6 dB and the ceiling
+  follows. It goes up by 6 dB, never above the ceiling, once 60 s have passed since the last
+  change, text was confirmed in those 60 s and the peaks under that text stay below
+  RAISE_PEAK_DBFS. A lowering within 60 s of a raise locks the ceiling at the lowered value.
+  All time is recorded audio, so pauses never count.
+- R2.3: judge() is the one verdict on a stretch of background ("high", "dead" or ""), shared by
+  the start dialog's level bar, the start of a recording and `lecture doctor --mic-test`.
+- R2.4: the last volume and ceiling per source (node.name) are kept in mic-levels.json.
 """
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass
+import json
 import math
+import os
+from pathlib import Path
 import re
 import subprocess
 import threading
+import time
 
 import numpy as np
+
+from .input_level import STILL_MEAN_DBFS, STILL_RANGE_DB  # "no change", as the steady-noise notice
 
 SOURCE = "@DEFAULT_AUDIO_SOURCE@"
 WINDOW_SAMPLES = 2 * 16000
 CLIP_RATIO = 0.001
 GAIN_STEP = 10 ** (-6 / 60)  # 6 dB; PipeWire volume v represents linear gain v³.
 CLIP_WINDOWS = 2        # consecutive clipping windows before one lowering (plan GUI-4 Q2.1)
-RAISE_SECONDS = 180     # recorded audio since the last change, and since the last clipping window
-LOCK_SECONDS = 60       # a lowering this soon after a raise stops all further raises this run
+RAISE_SECONDS = 60      # PLAN-GUI-5 R2.2: recorded audio since the last change before a raise
+RAISE_PEAK_DBFS = -30.0  # ... and the 95th percentile of peaks under confirmed text below this
+RAISE_PERCENTILE = 95
+LOCK_SECONDS = 60       # a lowering this soon after a raise locks the ceiling at the lowered value
 SAMPLE_RATE = 16000
 MIN_VOLUME = 0.10
+# PLAN-GUI-5 R2.1: the start calibration.
+BACKGROUND_TARGET = -45.0  # dBFS; the background should sit below this
+CALIBRATE_FIRST = 1.0      # seconds of background measured first
+CALIBRATE_SETTLE = 0.3     # after each step, audio left to settle (discarded)
+CALIBRATE_MEASURE = 0.5    # then measured again
+CALIBRATE_STEPS = 10
+CALIBRATE_TIMEOUT = 6.0    # never hold the lecture up longer; carry on with the value reached
+CALIBRATING = "正在调整麦克风音量"
+# PLAN-GUI-5 R2.3: the shared verdict.
+BLOCK_SAMPLES = 1600       # 100 ms, the level bar's block
+HIGH_DBFS = -20.0          # background above this with nobody talking: too loud
+HIGH_CLIPPED_SHARE = 0.2   # background clipping: at least this share of 100 ms blocks clipped
+HIGH_TEXT = "麦克风音量过高，开始上课时会自动调低"
+HIGH_MANUAL_TEXT = "麦克风音量过高，请在系统声音设置中调低"  # an input this program never adjusts
+DEAD_TEXT = "麦克风可能没有在工作：声音没有变化"
+LEVELS_FILE = "mic-levels.json"
 MUTED_NOTICE = "默认麦克风已静音；请手动取消静音，自动调节不会取消静音。"
 # wpctl get-volume prints two decimals, so a value set as 0.536313 reads back as 0.54.
 SAME_VOLUME = 0.006
@@ -88,24 +121,186 @@ def raised_text(target: float) -> str:
     return f"声音偏弱，麦克风音量已调回 {target:.0%}"
 
 
+def dbfs(value: float) -> float:
+    return 20 * math.log10(value) if value > 0 else -120.0
+
+
+def blocks(samples) -> list[dict]:
+    """The level bar's 100 ms blocks of float samples: RMS in dBFS and whether the block clipped."""
+    data = np.asarray(samples, dtype=np.float64).ravel()
+    result = []
+    for begin in range(0, data.size - BLOCK_SAMPLES + 1, BLOCK_SAMPLES):
+        block = data[begin:begin + BLOCK_SAMPLES]
+        result.append({"rms": dbfs(float(np.sqrt(np.mean(block * block)))),
+                       "clipped": bool(np.count_nonzero(np.abs(block) >= 0.999) / block.size >= CLIP_RATIO)})
+    return result
+
+
+def judge(levels: list[dict], *, adjusts: bool = True, volume: float | None = None, settled: bool = False) -> str:
+    """PLAN-GUI-5 R2.3: "high", "dead" or "" for a stretch of background (100 ms blocks of RMS dBFS and
+    clipping), checked in this order.
+
+    high: the background clips (HIGH_CLIPPED_SHARE of the blocks) or its median is above HIGH_DBFS.
+    dead: otherwise, background above -45 dBFS that moves less than 3 dB, when no adjustment can
+    explain it any more: R2.1 finished (settled) or this input is never adjusted (adjusts False); or
+    the volume is already at the 10 % floor and the background is still above BACKGROUND_TARGET.
+    The start dialog has neither, so before a lecture "dead" only follows from the floor."""
+    if not levels:
+        return ""
+    values = [level["rms"] for level in levels]
+    clipped = sum(1 for level in levels if level.get("clipped"))
+    if clipped / len(levels) >= HIGH_CLIPPED_SHARE or float(np.median(values)) > HIGH_DBFS:
+        return "high"
+    mean = sum(values) / len(values)
+    steady = mean > STILL_MEAN_DBFS and max(values) - min(values) < STILL_RANGE_DB
+    if steady and (settled or not adjusts):
+        return "dead"
+    if adjusts and volume is not None and volume <= MIN_VOLUME + SAME_VOLUME and mean > BACKGROUND_TARGET:
+        return "dead"
+    return ""
+
+
+def verdict_text(verdict: str, adjusts: bool = True) -> str:
+    """The status line under the level bar; nothing when the microphone is fine."""
+    if verdict == "high":
+        return HIGH_TEXT if adjusts else HIGH_MANUAL_TEXT
+    return DEAD_TEXT if verdict == "dead" else ""
+
+
+@dataclass(frozen=True)
+class Calibration:
+    """What R2.1 found: the volume reached, the run's ceiling and the last background measured."""
+    volume: float
+    ceiling: float
+    background: float      # RMS dBFS of the last measurement
+    clipped: bool
+    steps: int
+    timed_out: bool
+    levels: tuple = ()     # its 100 ms blocks, for judge()
+
+
+class Listener:
+    """PLAN-GUI-5 R2.1: while the start calibration runs, the input callback hands its samples here
+    instead of the recording, so they never reach recognition, the duration or the archive."""
+    def __init__(self):
+        self.lock = threading.Lock()
+        self.active = True
+        self.parts: list = []
+        self.size = 0
+
+    def feed(self, samples) -> bool:
+        """PortAudio callback: True while calibrating (the samples are taken), else False."""
+        with self.lock:
+            if not self.active:
+                return False
+            self.parts.append(np.array(samples, dtype=np.float32, copy=True))
+            self.size += len(samples)
+            return True
+
+    def close(self) -> None:
+        with self.lock:
+            self.active = False
+            self.parts, self.size = [], 0
+
+    async def listen(self, seconds: float):
+        """The next `seconds` of input. A stream that stalls ends the wait a second late, with what came."""
+        with self.lock:
+            self.parts, self.size = [], 0
+        wanted = int(seconds * SAMPLE_RATE)
+        deadline = time.monotonic() + seconds + 1
+        while time.monotonic() < deadline:
+            with self.lock:
+                if self.size >= wanted:
+                    break
+            await asyncio.sleep(0.02)
+        with self.lock:
+            data = np.concatenate(self.parts) if self.parts else np.zeros(0, dtype=np.float32)
+            self.parts, self.size = [], 0
+        return data[:wanted]
+
+
+def background(samples) -> tuple[float, bool, list[dict]]:
+    """RMS dBFS of a measurement, whether it clipped (CLIP_RATIO of its samples) and its blocks."""
+    data = np.asarray(samples, dtype=np.float64).ravel()
+    if not data.size:
+        return -120.0, False, []
+    rms = dbfs(float(np.sqrt(np.mean(data * data))))
+    return rms, bool(np.count_nonzero(np.abs(data) >= 0.999) / data.size >= CLIP_RATIO), blocks(data)
+
+
+def source_name(runner=None) -> str | None:
+    """node.name of the default source (`wpctl inspect`), the key of mic-levels.json; None if unknown."""
+    try:
+        result = run_wpctl(["inspect", SOURCE], runner or subprocess.run)
+    except VolumeError:
+        return None
+    match = re.search(r'node\.name\s*=\s*"([^"]+)"', result.stdout or "")
+    return match[1] if match else None
+
+
+def levels_path() -> Path:
+    return Path(os.environ.get("XDG_STATE_HOME", Path.home() / ".local" / "state")) / "lecture-cli" / LEVELS_FILE
+
+
+def is_volume(value) -> bool:
+    return isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value) and 0 < value <= 1.5
+
+
+def remembered(node: str | None) -> float | None:
+    """PLAN-GUI-5 R2.4: the volume this source ended the last normal lecture with; None when unknown.
+    An unreadable file or a missing entry is not an error."""
+    if not node:
+        return None
+    try:
+        entry = json.loads(levels_path().read_text()).get(node)
+        volume = entry.get("volume") if isinstance(entry, dict) else None
+    except (OSError, ValueError, AttributeError):
+        return None
+    return float(volume) if is_volume(volume) else None
+
+
+def remember(node, volume, ceiling) -> bool:
+    """PLAN-GUI-5 R2.4: after a normal end only. Other sources' entries stay; failures are silent."""
+    if not isinstance(node, str) or not node or not is_volume(volume) or not is_volume(ceiling):
+        return False
+    path = levels_path()
+    try:
+        current = json.loads(path.read_text())
+        if not isinstance(current, dict):
+            current = {}
+    except (OSError, ValueError):
+        current = {}
+    current[node] = {"volume": round(float(volume), 6), "ceiling": round(float(ceiling), 6),
+                     "updated": time.strftime("%Y-%m-%dT%H:%M:%S%z")}
+    try:
+        from .storage import write_json
+        path.parent.mkdir(parents=True, exist_ok=True)
+        write_json(path, current)
+    except OSError:
+        return False
+    return True
+
+
 class MicGain:
     def __init__(self, device, runner=None, start=None):
         self.runner = runner or subprocess.run
         self.lock = threading.Lock()
         self.clipped = self.total = 0
+        self.peak = 0.0
         self.paused = False
         self.skip_next = False
         self.active = False
         self.adjusted = None  # The last volume this run set, so the controller can put the start value back.
-        # Plan GUI-4 Q2: the raise rule's state, counted in seconds of recorded (unpaused) audio.
+        # PLAN-GUI-5 R2.2: the two-way rule's state, counted in seconds of recorded (unpaused) audio.
         self.pending_clip = False  # the previous window clipped and has not lowered anything yet
-        self.lowered = False       # raises are considered only after a lowering in this run
-        self.locked = False        # lowered again within LOCK_SECONDS of a raise: no more raises
-        self.since_change = 0.0    # since the last adjustment, up or down
-        self.since_clip = 0.0      # since the last window that reached CLIP_RATIO
+        self.locked = False        # lowered again within LOCK_SECONDS of a raise: the ceiling stays put
+        self.clock = 0.0           # recorded audio since the start calibration
+        self.since_change = 0.0    # since the last adjustment, up or down (or the calibration)
         self.since_raise = None    # since the last raise; None before the first
-        self.weak = False          # set by the capture loop: the weak-input notice (plan N3.4) is showing
+        self.windows: list = []    # (start, end, peak dBFS) of the windows of the last RAISE_SECONDS
         self.change = None         # {"id", "text"}: the GUI-only banner for the latest change
+        self.calibration: Calibration | None = None
+        self.node = None           # node.name of the default source, once the calibration asked
         self.notice = device_notice(device)
         if self.notice:
             return
@@ -114,8 +309,9 @@ class MicGain:
         except VolumeError as exc:
             self.notice = str(exc)
             return
-        # Never raise above the start value (session.json mic_volume_start), else the volume now.
-        self.start = start if isinstance(start, (int, float)) and not isinstance(start, bool) and math.isfinite(start) else self.volume
+        # The value before the lecture (session.json mic_volume_start), else the volume now.
+        self.start = start if is_volume(start) else self.volume
+        self.ceiling = self.volume  # until the calibration sets it
         self.notice = MUTED_NOTICE if muted else f"{self.volume:.0%} · 自动调节麦克风音量已启用"
         self.active = not muted
 
@@ -125,27 +321,80 @@ class MicGain:
             if self.active and not self.paused:
                 self.clipped += int(np.count_nonzero(np.abs(samples) >= 0.999))
                 self.total += samples.size
+                if samples.size:
+                    self.peak = max(self.peak, float(np.max(np.abs(samples))))
 
     def pause(self, paused: bool) -> None:
         with self.lock:
             self.paused = paused
             self.clipped = self.total = 0
+            self.peak = 0.0
             self.pending_clip = False  # A clipping run never spans a pause.
 
-    def poll(self, weak=None) -> bool:
+    async def calibrate(self, listen, clock=time.monotonic) -> Calibration | None:
+        """PLAN-GUI-5 R2.1, before any audio reaches recognition. listen(seconds) returns that much
+        input (Listener.listen). Starts from the volume remembered for this source when there is one;
+        then lowers by 6 dB while the background clips or is above BACKGROUND_TARGET, at most
+        CALIBRATE_STEPS times, never below MIN_VOLUME and not past CALIBRATE_TIMEOUT. No banner."""
+        if not self.active:
+            return None
+        begin = clock()
+        steps = 0
+        try:
+            self.node = source_name(self.runner)
+            last = remembered(self.node)
+            if last is not None:
+                last = min(1.0, max(MIN_VOLUME, last))
+                if abs(last - self.volume) > SAME_VOLUME:
+                    self.set(last)
+            rms, clipped, levels = background(await listen(CALIBRATE_FIRST))
+            while ((clipped or rms > BACKGROUND_TARGET) and steps < CALIBRATE_STEPS
+                   and self.volume > MIN_VOLUME + 1e-9 and clock() - begin < CALIBRATE_TIMEOUT):
+                self.set(max(MIN_VOLUME, self.volume * GAIN_STEP))
+                steps += 1
+                await listen(CALIBRATE_SETTLE)
+                rms, clipped, levels = background(await listen(CALIBRATE_MEASURE))
+        except VolumeError as exc:
+            self.active = False
+            self.notice = str(exc)
+            return None
+        loud = clipped or rms > BACKGROUND_TARGET
+        if steps or loud:
+            ceiling = self.volume  # one step higher was (or this one still is) too loud
+        else:
+            # No step was needed: the ceiling is where the background would reach the target
+            # (PipeWire's volume is the cube root of the gain, so 6 dB is GAIN_STEP), at most 100 %.
+            ceiling = max(self.volume, min(1.0, self.volume * 10 ** ((BACKGROUND_TARGET - rms) / 60)))
+        self.ceiling = ceiling
+        self.calibration = Calibration(self.volume, ceiling, round(rms, 1), clipped, steps,
+                                       loud and clock() - begin >= CALIBRATE_TIMEOUT, tuple(levels))
+        self.notice = f"{self.volume:.0%} · 自动调节麦克风音量已启用"
+        with self.lock:
+            self.clipped = self.total = 0
+            self.peak = 0.0
+        self.clock = self.since_change = 0.0
+        self.windows = []
+        return self.calibration
+
+    def set(self, volume: float) -> None:
+        run_wpctl(["set-volume", SOURCE, f"{volume:.6f}"], self.runner)
+        self.volume = self.adjusted = volume
+
+    def poll(self, texts=()) -> bool:
         """Main loop only. Return whether the notice or the banner changed and needs publishing.
-        weak: whether the weak-input notice is showing (else the attribute set by the caller)."""
-        if weak is not None:
-            self.weak = weak
+        texts: (start, end) in recorded seconds of the confirmed segments, for the raise rule."""
         with self.lock:
             if not self.active or self.paused or self.total < WINDOW_SAMPLES:
                 return False
-            clipped, total = self.clipped, self.total
+            clipped, total, peak = self.clipped, self.total, self.peak
             self.clipped = self.total = 0
+            self.peak = 0.0
         seconds = total / SAMPLE_RATE
         clip = clipped / total >= CLIP_RATIO
+        self.windows = [w for w in self.windows if w[1] > self.clock + seconds - RAISE_SECONDS]
+        self.windows.append((self.clock, self.clock + seconds, dbfs(peak)))
+        self.clock += seconds
         self.since_change += seconds
-        self.since_clip = 0.0 if clip else self.since_clip + seconds
         if self.since_raise is not None:
             self.since_raise += seconds
         if self.skip_next:
@@ -156,7 +405,7 @@ class MicGain:
             return False
         if not clip:
             self.pending_clip = False
-            return self.maybe_raise()
+            return self.maybe_raise(texts)
         if not self.pending_clip:
             self.pending_clip = True  # One clipping window alone (a tap on the desk) only counts.
             return False
@@ -169,8 +418,9 @@ class MicGain:
                 run_wpctl(["set-volume", SOURCE, f"{decision.volume:.6f}"], self.runner)
                 self.changed(lowered_text(self.volume, decision.volume))
                 if self.since_raise is not None and self.since_raise <= LOCK_SECONDS:
-                    self.locked = True
-                self.lowered = True
+                    self.locked = True  # back down, and never above this again this run
+                # R2.2: the ceiling follows a lowering down.
+                self.ceiling = min(self.ceiling, decision.volume)
                 self.volume = self.adjusted = decision.volume
                 self.skip_next = decision.skip_next
             if muted:
@@ -182,10 +432,20 @@ class MicGain:
         self.notice = decision.notice
         return changed
 
-    def maybe_raise(self) -> bool:
-        """Plan GUI-4 Q2.2: back up by 6 dB, never above the start value."""
-        if not (self.lowered and not self.locked and self.weak
-                and self.since_change >= RAISE_SECONDS and self.since_clip >= RAISE_SECONDS):
+    def under_text(self, texts) -> list[float]:
+        """Peaks of the windows of the last RAISE_SECONDS that overlap a confirmed segment."""
+        spans = [(float(a), float(b)) for a, b in texts if b > self.clock - RAISE_SECONDS]
+        return [peak for start, end, peak in self.windows
+                if end > self.clock - RAISE_SECONDS and any(a < end and b > start for a, b in spans)]
+
+    def maybe_raise(self, texts) -> bool:
+        """PLAN-GUI-5 R2.2: up by 6 dB when all hold: RAISE_SECONDS since the last change; text
+        confirmed in that time; the 95th percentile of the peaks under it below RAISE_PEAK_DBFS;
+        and the result not above the ceiling."""
+        if self.since_change < RAISE_SECONDS:
+            return False
+        peaks = self.under_text(texts)
+        if not peaks or float(np.percentile(peaks, RAISE_PERCENTILE)) >= RAISE_PEAK_DBFS:
             return False
         try:
             self.volume, muted = self.read()
@@ -194,11 +454,11 @@ class MicGain:
                 changed = self.notice != MUTED_NOTICE
                 self.notice = MUTED_NOTICE
                 return changed
-            target = min(self.start, self.volume / GAIN_STEP)
-            if self.start - target <= SAME_VOLUME:
-                target = self.start
+            target = min(self.ceiling, self.volume / GAIN_STEP)
+            if self.ceiling - target <= SAME_VOLUME:
+                target = self.ceiling
             if target - self.volume <= SAME_VOLUME:
-                return False  # Already at (or above) the start value, e.g. raised by hand.
+                return False  # Already at (or above) the ceiling, e.g. raised by hand.
             run_wpctl(["set-volume", SOURCE, f"{target:.6f}"], self.runner)
         except VolumeError as exc:
             self.active = False
@@ -226,6 +486,20 @@ class MicGain:
         # Start the settling window after wpctl returns.
         with self.lock:
             self.clipped = self.total = 0
+            self.peak = 0.0
+
+    def publish(self, state: dict) -> None:
+        """The asr-state.json fields this rule owns."""
+        state["gain_notice"] = self.notice
+        if self.adjusted is not None:
+            state["gain_volume"] = self.adjusted  # Plan N3.5: restored after the run when unchanged.
+        if self.change:
+            state["gain_change"] = self.change  # Plan GUI-4 Q2.3: GUI banner only, never the note.
+        if self.active and self.calibration is not None:
+            # PLAN-GUI-5 R2.1/R2.4: the bottom bar's "22% · 自动", and what a normal end remembers.
+            state.update(mic_volume=round(self.volume, 6), mic_ceiling=round(self.ceiling, 6), mic_node=self.node)
+        elif not self.active:
+            state.pop("mic_volume", None)
 
 
 def mic_gain(meta, runner=None) -> MicGain | None:
@@ -267,3 +541,8 @@ def restore_volume(start, adjusted, runner=None) -> str:
     except VolumeError:
         return f"未能恢复为开始时的 {start:.0%}（wpctl 不可用），请在系统声音设置中调回。"
     return f"已恢复为开始时的 {start:.0%}。"
+
+
+def remember_levels(state: dict) -> bool:
+    """PLAN-GUI-5 R2.4, from the controller after a normal end: the capture's last volume and ceiling."""
+    return remember(state.get("mic_node"), state.get("mic_volume"), state.get("mic_ceiling"))

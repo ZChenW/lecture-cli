@@ -19,6 +19,10 @@ NO_SIGNAL = "麦克风几乎没有信号，请检查是否选对了麦克风、�
 # Plan GUI-4 Q1.4: a microphone that delivers only steady noise (incident 1: about -32 dBFS that
 # barely moved for 9 minutes). Per-second RMS over 30 s of fed audio, pauses excluded.
 STILL_SECONDS = 30
+# PLAN-GUI-5 R2.6: after the first 30 s the levels must hold still this long before the notice, and
+# once the user closes it the rule stays quiet for the rest of the recording.
+STILL_LATER_SECONDS = 120
+DISMISS_STILL = "dismiss-still"  # the sentinel the GUI writes when the notice is closed
 STILL_RANGE_DB = 3.0      # max - min of the 30 per-second levels below this is "no change"
 STILL_MEAN_DBFS = -45.0   # ... and their mean above this: there is signal, it just never moves
 STILL_CLEAR_DB = 6.0      # a later 30 s whose levels span this much clears the notice
@@ -65,7 +69,9 @@ class WeakInput:
         self.second_squares = 0.0
         self.second_samples = 0
         self.second_count = 0     # confirmed segments when the current second began
-        self.levels = []          # (dBFS, confirmed segments when that second began), the last 30 s
+        self.levels = []          # (dBFS, confirmed segments when that second began), the last 120 s
+        self.level_seconds = 0    # whole seconds measured so far (PLAN-GUI-5 R2.6)
+        self.still_off = False    # closed by the user: never again this recording (PLAN-GUI-5 R2.6)
         # Plan GUI-4 Q3.2: each 10 s window's RMS is appended to this file (levels.jsonl) when set, on
         # the transcript's clock: every sample fed here, a partial window dropped at a pause included.
         self.levels_path = None
@@ -131,10 +137,17 @@ class WeakInput:
         self.squares, self.samples = 0.0, 0
         self.second_squares, self.second_samples = 0.0, 0
 
+    def dismiss_still(self) -> bool:
+        """PLAN-GUI-5 R2.6: the user closed the steady-noise notice. True if the notice changed."""
+        before = self.notice
+        self.still_off, self.still = True, ""
+        return self.notice != before
+
     def check_still(self, data, confirmed: int) -> bool:
-        """Plan GUI-4 Q1.4: 30 s of per-second levels that hardly move, above -45 dBFS on average,
-        with no new confirmed text: probably only noise. New text, or a later 30 s spanning 6 dB or
-        more, clears it."""
+        """Plan GUI-4 Q1.4: per-second levels that hardly move, above -45 dBFS on average, with no new
+        confirmed text: probably only noise. PLAN-GUI-5 R2.6: the first 30 s of the recording keep that
+        rule; after them the levels must hold still for 120 s; a dismissed notice never comes back.
+        New text, or a later 30 s spanning 6 dB or more, clears it."""
         before = self.notice
         if self.still and confirmed > self.still_count:
             self.still = ""
@@ -148,15 +161,24 @@ class WeakInput:
                 break
             rms = (self.second_squares / self.second_samples) ** 0.5
             self.second_squares, self.second_samples = 0.0, 0
-            self.levels = (self.levels + [(20 * math.log10(rms) if rms > 0 else FLOOR_DBFS, self.second_count)])[-STILL_SECONDS:]
-            if len(self.levels) < STILL_SECONDS:
+            self.levels = (self.levels + [(20 * math.log10(rms) if rms > 0 else FLOOR_DBFS, self.second_count)])[-STILL_LATER_SECONDS:]
+            self.level_seconds += 1
+            if self.still_off or len(self.levels) < STILL_SECONDS:
                 continue
-            values = [level for level, _ in self.levels]
-            spread = max(values) - min(values)
-            if self.still and spread >= STILL_CLEAR_DB:
+            recent = [level for level, _ in self.levels[-STILL_SECONDS:]]
+            if self.still and max(recent) - min(recent) >= STILL_CLEAR_DB:
                 self.still = ""
-            elif (not self.still and spread < STILL_RANGE_DB and sum(values) / len(values) > STILL_MEAN_DBFS
-                  and confirmed == self.levels[0][1]):
+                continue
+            if self.still:
+                continue
+            # The recording's first 30 s, else the last 120 s.
+            window = self.levels if self.level_seconds == STILL_SECONDS else (
+                self.levels if len(self.levels) >= STILL_LATER_SECONDS else None)
+            if window is None:
+                continue
+            values = [level for level, _ in window]
+            if (max(values) - min(values) < STILL_RANGE_DB and sum(values) / len(values) > STILL_MEAN_DBFS
+                    and confirmed == window[0][1]):
                 self.still, self.still_count = STILL, confirmed
         return self.notice != before
 

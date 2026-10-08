@@ -14,11 +14,11 @@ import httpx
 import numpy as np
 
 from .audio_buffer import AudioBuffer, drain_timeout
-from .capture import Transcript
+from .capture import Transcript, calibrate
 from .refinement import BYTES_PER_SECOND, segment_cut
 from .storage import has_content, read_json, write_json
-from .mic_gain import mic_gain
-from .input_level import NOTICE as WEAK_NOTICE, WeakInput
+from .mic_gain import Listener, mic_gain
+from .input_level import DISMISS_STILL, WeakInput
 
 API_TIMEOUT = httpx.Timeout(60, connect=10)
 RETRY_WARNING = "转录服务暂不可用，正在重试；音频已暂存"
@@ -145,6 +145,8 @@ async def record(directory: Path, transport=None):
         extracted = 0.0
         last_write = 0.0
         gain = mic_gain(meta)
+        # PLAN-GUI-5 R2.1: the input goes to the start calibration first, never to recognition.
+        listener = Listener() if gain and gain.active else None
         weak = WeakInput()
         weak.levels_path = directory / "levels.jsonl"  # Plan GUI-4 Q3.2: read by weak_spans after class.
 
@@ -153,17 +155,15 @@ async def record(directory: Path, transport=None):
             if not force and time.monotonic() - last_write < 0.15:
                 return
             if gain:
-                state["gain_notice"] = gain.notice
-                if gain.adjusted is not None:
-                    state["gain_volume"] = gain.adjusted  # Plan N3.5: restored after the run when unchanged.
-                if gain.change:
-                    state["gain_change"] = gain.change  # Plan GUI-4 Q2.3: GUI banner only, never the note.
+                gain.publish(state)
             state.update(audio.snapshot(), lag=max(0, extracted - state["seconds"]),
                          last=transcript.last, count=transcript.count)
             write_json(state_path, state)
             last_write = time.monotonic()
 
         def callback(indata, frames, timing, status):
+            if listener and listener.feed(indata[:, 0]):
+                return  # PLAN-GUI-5 R2.1: calibration audio is not recorded, counted or uploaded.
             if gain:
                 gain.observe(indata[:, 0])
             data = np.clip(indata[:, 0], -1, 1)
@@ -184,9 +184,10 @@ async def record(directory: Path, transport=None):
                         stream.stop() if paused else stream.start()
                     state["status"] = "已暂停" if paused else "录制中"
                     publish(True)
-                if gain:
-                    gain.weak = weak.notice == WEAK_NOTICE  # Plan GUI-4 Q2.2: raises only while it shows.
-                if gain and gain.poll():
+                if gain and gain.poll(transcript.spans):
+                    publish(True)
+                if not weak.still_off and (directory / DISMISS_STILL).exists() and weak.dismiss_still():
+                    state["weak_input"] = weak.notice  # PLAN-GUI-5 R2.6: closed once, gone for this recording.
                     publish(True)
                 publish()
                 # File input has no real-time pacing with --fast; do not outrun the bounded queue.
@@ -254,6 +255,8 @@ async def record(directory: Path, transport=None):
                 stream = sd.InputStream(samplerate=16000, channels=1, dtype="float32", blocksize=8000,
                                         device=meta.get("device"), callback=callback)
                 stream.start()
+                if listener:
+                    await calibrate(gain, listener, state, publish)
             state["status"] = "录制中"
             publish(True)
             feeder = asyncio.create_task(feed())
@@ -269,6 +272,8 @@ async def record(directory: Path, transport=None):
             state["status"] = "转录完成"
             publish(True)
         finally:
+            if listener:
+                listener.close()
             for task in (feeder, consumer):
                 if task:
                     task.cancel()

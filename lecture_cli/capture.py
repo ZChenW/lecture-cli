@@ -12,8 +12,8 @@ from pathlib import Path
 from .storage import has_content, read_json, write_json
 from .audio_buffer import AudioBuffer, drain_timeout
 from .asr import build_engine, session_context
-from .mic_gain import mic_gain
-from .input_level import NOTICE as WEAK_NOTICE, WeakInput
+from .mic_gain import CALIBRATING, Listener, judge, mic_gain, verdict_text
+from .input_level import DISMISS_STILL, WeakInput
 
 
 def timestamp(seconds: float) -> str:
@@ -48,6 +48,7 @@ class Transcript:
         self.pending: list = []
         self.count = 0
         self.last = ""
+        self.spans: list[tuple[float, float]] = []  # PLAN-GUI-5 R2.2: recent segments, recorded seconds
 
     def append(self, text: str, start: float, end: float) -> None:
         if not text.strip():
@@ -61,6 +62,7 @@ class Transcript:
             f.write(json.dumps(record, ensure_ascii=False) + "\n")
             f.flush()
         self.last = text.strip()
+        self.spans = (self.spans + [(float(start), float(end))])[-200:]
 
     def consume(self, lines) -> None:
         for line in lines:
@@ -102,6 +104,21 @@ class Transcript:
             self.pending.clear()
 
 
+async def calibrate(gain, listener, state: dict, publish, clock=time.monotonic) -> None:
+    """PLAN-GUI-5 R2.1 and R2.3, shared with api_capture: set the volume before recording, then say
+    something only when the microphone looks dead (a loud one was just handled)."""
+    state["status"] = CALIBRATING
+    publish(True)
+    try:
+        result = await gain.calibrate(listener.listen, clock)
+    finally:
+        listener.close()
+    if result is not None:
+        verdict = judge(list(result.levels), volume=result.volume, settled=not result.timed_out)
+        if verdict == "dead":
+            state["mic_verdict"] = verdict_text(verdict)
+
+
 async def record(directory: Path) -> None:
     import numpy as np
     from whisperlivekit import AudioProcessor
@@ -126,6 +143,8 @@ async def record(directory: Path) -> None:
     paused = False
     last_write = 0.0
     gain = mic_gain(meta)
+    # PLAN-GUI-5 R2.1: the input goes to the start calibration first, never to recognition.
+    listener = Listener() if gain and gain.active else None
     weak = WeakInput()
     weak.levels_path = directory / "levels.jsonl"  # Plan GUI-4 Q3.2: read by weak_spans after class.
 
@@ -133,11 +152,7 @@ async def record(directory: Path) -> None:
         nonlocal last_write
         if force or time.monotonic() - last_write > 0.15:
             if gain:
-                state["gain_notice"] = gain.notice
-                if gain.adjusted is not None:
-                    state["gain_volume"] = gain.adjusted  # Plan N3.5: restored after the run when unchanged.
-                if gain.change:
-                    state["gain_change"] = gain.change  # Plan GUI-4 Q2.3: GUI banner only, never the note.
+                gain.publish(state)
             if not meta.get("audio_file"):
                 state.update(audio.snapshot())
             if state.get("input_overflows"):
@@ -150,6 +165,8 @@ async def record(directory: Path) -> None:
 
     def callback(indata, frames, timing, status):
         # Never call ASR or the network on PortAudio's callback thread.
+        if listener and listener.feed(indata[:, 0]):
+            return  # PLAN-GUI-5 R2.1: calibration audio is not recorded, counted or archived.
         if gain:
             gain.observe(indata[:, 0])
         data = np.clip(indata[:, 0], -1, 1)
@@ -181,6 +198,8 @@ async def record(directory: Path) -> None:
             stream = sd.InputStream(samplerate=16000, channels=1, dtype="float32", blocksize=8000,
                                     device=meta.get("device"), callback=callback)
             stream.start()
+            if listener:
+                await calibrate(gain, listener, state, publish)
         state["status"] = "录制中"
         publish(True)
         while not (directory / "stop").exists():
@@ -201,9 +220,10 @@ async def record(directory: Path) -> None:
                 state["status"] = "已暂停" if paused else "录制中"
                 state["level"] = 0
                 publish(True)
-            if gain:
-                gain.weak = weak.notice == WEAK_NOTICE  # Plan GUI-4 Q2.2: raises only while it shows.
-            if gain and gain.poll():
+            if gain and gain.poll(transcript.spans):
+                publish(True)
+            if not weak.still_off and (directory / DISMISS_STILL).exists() and weak.dismiss_still():
+                state["weak_input"] = weak.notice  # PLAN-GUI-5 R2.6: closed once, gone for this recording.
                 publish(True)
             if paused and not audio.snapshot()["queued"]:
                 await asyncio.sleep(0.1)
@@ -258,6 +278,8 @@ async def record(directory: Path) -> None:
         publish(True)
         raise
     finally:
+        if listener:
+            listener.close()
         if stream:
             stream.close()
         audio.close()

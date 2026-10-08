@@ -10,7 +10,7 @@ from lecture_cli import mic_gain
 
 @pytest.fixture(autouse=True)
 def fake_wpctl(monkeypatch):
-    fake = SimpleNamespace(volume=0.85, muted=False, calls=[])
+    fake = SimpleNamespace(volume=0.85, muted=False, calls=[], node="alsa_input.fake-test-mic")
 
     def run(command, **kwargs):
         assert threading.current_thread() is threading.main_thread(), "wpctl ran in an audio callback"
@@ -19,6 +19,8 @@ def fake_wpctl(monkeypatch):
         fake.calls.append(command)
         if command[1] == "set-volume":
             fake.volume = float(command[3])
+        elif command[1] == "inspect":  # PLAN-GUI-5 R2.4: the source's node.name keys mic-levels.json.
+            return SimpleNamespace(stdout=f'id 42, type PipeWire:Interface:Node\n  * node.name = "{fake.node}"\n')
         else:
             assert command[1] == "get-volume"
         return SimpleNamespace(stdout=f"Volume: {fake.volume}" + (" [MUTED]" if fake.muted else ""))

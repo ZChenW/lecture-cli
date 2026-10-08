@@ -1,6 +1,6 @@
 <script lang="ts">
   import { formatElapsed, weakLabel } from "../../lib/format";
-  import { BACKLOG_WARN_SECONDS, closingHint, destinationLine, gainState, micPercent } from "../../lib/record";
+  import { BACKLOG_WARN_SECONDS, closingHint, destinationLine, gainState, micPercent, recordingState } from "../../lib/record";
   import type { Snapshot } from "../../lib/types";
   import NotesCard from "./NotesCard.svelte";
   import StateLabel from "./StateLabel.svelte";
@@ -20,7 +20,7 @@
 
 <main class="cols">
   <section class="left">
-    <StateLabel text={snapshot.paused ? "已暂停" : "录制中"} live={!snapshot.paused} />
+    <StateLabel text={recordingState(snapshot)} live={!snapshot.paused} />
     <div class="timer" class:long={snapshot.elapsed_seconds >= 3600} data-timer>{formatElapsed(snapshot.elapsed_seconds)}</div>
     <Waveform {samples} paused={snapshot.paused} />
     <div class="meta">

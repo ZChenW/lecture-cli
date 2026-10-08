@@ -176,14 +176,26 @@ export interface GainState { cell: string; detail: string; warn: boolean }
 /**
  * The automatic mic volume notice (lecture_cli/mic_gain.py) belongs in the mic cell, not a banner:
  * "自动调节开" while it works, "自动调节关" when it could not start. Only a muted microphone or one
- * already at the volume floor is a warning.
+ * already at the volume floor is a warning. PLAN-GUI-5 R2.1: once the opening adjustment is done the
+ * cell says the volume it keeps, e.g. "22% · 自动".
  */
 export function gainState(asr: Snapshot["asr"]): GainState | null {
   const text = asr.notices.find((notice) => notice.kind === "gain")?.text ?? "";
   if (!text) return null;
   if (/静音|下限/.test(text)) return { cell: "自动调节开", detail: text, warn: true };
   if (/未启用|失败|无法读取|已停止/.test(text)) return { cell: "自动调节关", detail: text, warn: false };
-  return { cell: "自动调节开", detail: text, warn: false };
+  const volume = asr.mic_volume;
+  const cell = volume != null && Number.isFinite(volume) ? `${Math.round(volume * 100)}% · 自动` : "自动调节开";
+  return { cell, detail: text, warn: false };
+}
+
+/** PLAN-GUI-5 R2.1: the capture process's status while it sets the volume, before anything is recorded. */
+export const CALIBRATING = "正在调整麦克风音量";
+
+/** The left column's state word: 已暂停, 正在调整麦克风音量 at the very start, else 录制中. */
+export function recordingState(snapshot: Pick<Snapshot, "paused" | "asr">): string {
+  if (snapshot.paused) return "已暂停";
+  return snapshot.asr.status === CALIBRATING ? CALIBRATING : "录制中";
 }
 
 /** The left column's line under the date: a future tense until the file is really written. */
