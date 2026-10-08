@@ -236,4 +236,9 @@
     font-size: 15px;
     text-decoration: none;
   }
+  /* PLAN-GUI-3 section 8: a 1366x768 laptop leaves a window about 700px tall once the desktop panel
+     and title bar are taken. Less vertical whitespace first; the transcript and bottom bar stay. */
+  @media (max-height: 720px) {
+    .record { padding: 20px 44px 24px; gap: 16px; }
+  }
 </style>

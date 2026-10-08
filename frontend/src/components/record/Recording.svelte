@@ -147,4 +147,12 @@
   kbd { font-family: 'Geist Mono', monospace; font-size: 12px; border-radius: 5px; padding: 2px 7px; }
   .pause kbd { color: #8E9096; border: 1px solid #34363B; }
   .stop kbd { font-weight: 500; border: 1px solid rgba(11, 12, 14, 0.35); }
+  /* PLAN-GUI-3 section 8: short windows (a 1366x768 laptop) shrink the timer and the vertical
+     whitespace before anything else; the transcript and the bottom bar are never hidden. */
+  @media (max-height: 720px) {
+    .left { gap: 20px; }
+    .timer { font-size: 152px; }
+    .timer.long { font-size: 112px; }
+    .bar { padding-top: 18px; }
+  }
 </style>
