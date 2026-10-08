@@ -338,7 +338,7 @@
     {/if}
     <div class="panel-body" class:flush={shown === "review" && !!checklist} bind:this={panelBody}>
       {#if shown === "review" && checklist}
-        {#if checklist.items.length}<p class="intro">模型没有把握的地方。对照课件确认后打勾，程序不会自动修改笔记。</p>{/if}
+        {#if checklist.items.length}<p class="intro">对照课件确认后打勾。</p>{/if}
         {#if checkError}<p class="error-text check-error" role="alert">{checkError}</p>{/if}
         {#each checklist.items as item (item.id)}
           <div class="item" class:done={item.checked}>
@@ -366,7 +366,7 @@
           </div>
         {/if}
       {:else if shown === "review"}
-        <p class="review-about">以下是模型没有把握的地方。请对照课件或录音确认；程序不会自动修改它们。</p>
+        <p class="review-about">对照课件确认。</p>
         <div class="prose small" bind:this={reviewBox}>{@html review}</div>
       {:else if transcript}
         {#if !found && target}<p class="missing">转录里没有 L{target.first}{target.last > target.first ? `–L${target.last}` : ""}（{target.version}）对应的片段</p>{/if}

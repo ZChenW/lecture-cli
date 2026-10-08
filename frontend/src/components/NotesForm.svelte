@@ -51,10 +51,11 @@
     }
   }
 
+  // PLAN-GUI-5 R1: no line under each service; the address field below shows it anyway.
   const options = Object.entries(presets).map(([id, preset]) => ({
     value: id,
     title: preset.label.replace(/（.*）$/, ""),
-    text: id === "custom" ? "任何 OpenAI 兼容的服务" : preset.api_base,
+    tip: id === "custom" ? "任何 OpenAI 兼容的服务" : preset.api_base,
   }));
 </script>
 
@@ -62,7 +63,7 @@
   <div class="field">
     {#if look === "tabs"}<span class="label">服务</span>{/if}
     <Choices {look} compact label="笔记服务" bind:value={provider} onchange={choosePreset}
-      options={look === "tabs" ? options.map(({ value, title }) => ({ value, title })) : options} />
+      {options} />
   </div>
   <div class="grid">
     <label class="field">

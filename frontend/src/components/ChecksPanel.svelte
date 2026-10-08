@@ -29,8 +29,8 @@
 
 <div class="stack">
   <div class="row">
-    <button type="button" class="btn" onclick={run} disabled={busy}><Icon name="refresh" />{busy ? "正在检查…" : results ? "重新检查" : "开始检查"}</button>
-    {#if busy}<span class="hint" role="status">检查可能需要几秒。</span>{/if}
+    <button type="button" class="btn" onclick={run} disabled={busy}
+      title="检查本地依赖、模型、麦克风和两个服务的连接；会向服务发送一次很小的测试请求"><Icon name="refresh" />{busy ? "正在检查…" : results ? "重新检查" : "开始检查"}</button>
   </div>
   {#if error}<p class="error-text" role="alert">{error}</p>{/if}
   {#if results}

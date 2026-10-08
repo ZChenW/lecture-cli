@@ -2,10 +2,10 @@
   import type { Snippet } from "svelte";
   import { refresh } from "../lib/state.svelte";
 
-  // One row of design/D-settings.reference.html: heading and description on the left, the form
-  // on the right. onsave is absent for sections without settings of their own (环境检查).
-  let { id, title, about, onsave, gap = 28, children }: {
-    id: string; title: string; about: string; onsave?: () => Promise<boolean>; gap?: number; children: Snippet;
+  // One row of design/D-settings.reference.html: the heading on the left (no description, PLAN-GUI-5
+  // R1), the form on the right. onsave is absent for sections without settings of their own (环境检查).
+  let { id, title, onsave, gap = 28, children }: {
+    id: string; title: string; onsave?: () => Promise<boolean>; gap?: number; children: Snippet;
   } = $props();
   let busy = $state(false);
   let status = $state<"clean" | "dirty" | "saved" | "failed">("clean");
@@ -31,7 +31,6 @@
 <section {id} aria-labelledby="{id}-title">
   <div class="about">
     <h2 id="{id}-title" tabindex="-1">{title}</h2>
-    <p>{about}</p>
   </div>
   <div class="body" style:gap="{gap}px" oninput={touched} onchange={touched}>
     {@render children()}
@@ -58,7 +57,6 @@
   .about { flex: 1 1 200px; max-width: 240px; display: flex; flex-direction: column; gap: 10px; }
   h2 { margin: 0; font-family: "Noto Serif CJK SC", serif; font-weight: 600; font-size: 22px; color: #111111; }
   h2:focus { outline: none; }
-  .about p { margin: 0; font-size: 13px; line-height: 1.7; color: #5C5C5A; }
   .body { flex: 999 1 380px; min-width: 0; display: flex; flex-direction: column; }
   .save { display: flex; align-items: center; gap: 16px; }
   .save .btn { height: 44px; padding: 0 22px; font-size: 14px; }

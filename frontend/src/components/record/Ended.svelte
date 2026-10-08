@@ -70,7 +70,7 @@
         <div>
           <p>这次录制没有识别出任何内容，所以没有生成笔记。可能的原因：</p>
           <ul class="causes">{#each CAUSES as cause (cause)}<li>{cause}</li>{/each}</ul>
-          <p class="sub">可以在设置里测试麦克风，或在终端运行 <span class="mono cmd">lecture doctor --mic-test</span>。</p>
+          <p class="sub">可以在终端运行 <span class="mono cmd">lecture doctor --mic-test</span> 检查麦克风。</p>
         </div>
       </div>
     {:else if kind === "unsaved"}

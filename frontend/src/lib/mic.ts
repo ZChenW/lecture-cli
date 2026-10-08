@@ -3,7 +3,6 @@
 // open) arrives with the server's own message.
 import type { MicLevel, MicTestResult } from "./types";
 
-export const HINT = "说句话，电平条应该跟着动";
 export const STILL_HINT = "麦克风可能没有在工作：声音没有变化";
 export const FAILED = "没有检测到明显的声音变化";
 export const ADVICE = [

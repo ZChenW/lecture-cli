@@ -4,7 +4,6 @@ import type { Config } from "./types";
 export type RefineChoice = "local" | "api" | "off";
 
 export const UPLOAD_NOTICE = "课堂音频会上传到转录服务";
-export const QWEN_NOTE = "中文课堂本机 Qwen 通常更准";
 export const DEFAULT_API_MODEL = "whisper-large-v3";
 
 export function refineChoice(config: Pick<Config, "refine" | "refine_backend">): RefineChoice {

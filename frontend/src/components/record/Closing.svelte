@@ -51,7 +51,6 @@
 </main>
 
 <footer class="bar">
-  <span class="hint">收尾在后台进行，关闭窗口不会中断</span>
   {#if snapshot.can_skip}
     <button class="skip" aria-disabled={busy} onclick={() => busy || onskip()}>跳过校正，用实时转录生成笔记</button>
   {/if}
@@ -105,8 +104,9 @@
     /* Same height with or without the skip button, so the rule does not jump between stages. */
     min-height: 56px;
   }
-  .hint { font-size: 12px; color: #8E9096; }
+  /* PLAN-GUI-5 R1: the bar has no text line; the button keeps its place on the right. */
   .skip {
+    margin-left: auto;
     height: 56px;
     padding: 0 26px;
     border-radius: 999px;

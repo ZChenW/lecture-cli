@@ -7,7 +7,6 @@ export type LiveChoice = "whisper" | "qwen";
 export type QwenState = "checking" | "failed" | "missing" | "ready";
 export interface LiveOption { enabled: boolean; aside: string; hint?: string }
 
-export const FOOTER = "这门课会记住以上选择。";
 export const isQwen = (model: string | null | undefined) => !!model && model.startsWith("qwen");
 
 export function qwenState(live: QwenLive | null, failed: boolean): QwenState {

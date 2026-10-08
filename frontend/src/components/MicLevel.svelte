@@ -1,28 +1,24 @@
 <script lang="ts">
   import { onDestroy, onMount } from "svelte";
-  import { ADVICE, CELLS, HINT, STILL_HINT, cells, resultText, watchLevel } from "../lib/mic";
-  import type { MicLevel, MicTestResult } from "../lib/types";
+  import { CELLS, STILL_HINT, cells, watchLevel } from "../lib/mic";
+  import type { MicLevel } from "../lib/types";
 
   // Plan GUI-4 Q1.5: a live level bar for the configured input. Cells in an SVG rather than <meter>
-  // (its default look) or inline styles (the CSP). passive: the start dialog's hint, which turns
-  // into a warning when the first 2 s hardly move. test: the 5-second test button.
-  let { passive = false, test = false }: { passive?: boolean; test?: boolean } = $props();
+  // (its default look) or inline styles (the CSP). PLAN-GUI-5 R1: only the bar and the value; a line
+  // of status text appears below only when something is wrong. passive: the start dialog, which
+  // warns when the first 2 s hardly move.
+  let { passive = false }: { passive?: boolean } = $props();
   let level = $state<MicLevel | null>(null);
   let peaks = $state<number[]>([]);
   let still = $state(false);
   let error = $state("");
   let stopped = $state("");
-  let testing = $state(false);
-  let heard = $state(0);
-  let result = $state<MicTestResult | null>(null);
   let stream: { close(): void } | null = null;
   let shown = $derived(cells(level, peaks.length ? Math.max(...peaks) : null));
-  let remaining = $derived(Math.max(1, 5 - Math.floor(heard / 10)));
 
   function onLevel(next: MicLevel) {
     level = next;
     peaks = [...peaks, next.peak].slice(-15);  // The peak marker holds about 1.5 s.
-    if (testing) heard += 1;
   }
 
   function startLive() {
@@ -36,24 +32,6 @@
     });
   }
 
-  function runTest() {
-    stream?.close();
-    testing = true;
-    heard = 0;
-    result = null;
-    error = stopped = "";
-    stream = watchLevel({
-      level: onLevel,
-      result: (value) => (result = value),
-      busy: () => (stopped = "正在录制，测试已停止"),
-      error: (message) => (error = message),
-      end: () => {
-        testing = false;
-        if (!error && !stopped) startLive();
-      },
-    }, { test: true });
-  }
-
   /** Let go of the microphone, e.g. just before a lecture opens it. */
   export function stop() {
     stream?.close();
@@ -64,7 +42,6 @@
   /** Listen again, e.g. after the saved input device changed. */
   export function restart() {
     still = false;
-    result = null;
     startLive();
   }
 
@@ -87,23 +64,8 @@
     <p class="note warn" role="status">{error}</p>
   {:else if stopped}
     <p class="note" role="status">{stopped}</p>
-  {:else if passive}
-    <p class="note" class:warn={still} role="status">{still ? STILL_HINT : HINT}</p>
-  {/if}
-  {#if test}
-    <div class="test">
-      <button type="button" class="btn" onclick={runTest} disabled={testing}>{testing ? "正在测试…" : "测试"}</button>
-      <p class="note" role="status">
-        {#if testing}请正常说几句话，还剩 {remaining} 秒
-        {:else if result}<span class:warn={!result.passed} class:ok={result.passed}>{resultText(result)}</span>
-        {:else}测试 5 秒：期间说几句话，看电平条是否跟着动{/if}
-      </p>
-    </div>
-    {#if result && !result.passed && !testing}
-      <ul class="advice">
-        {#each ADVICE as line (line)}<li>{line}</li>{/each}
-      </ul>
-    {/if}
+  {:else if passive && still}
+    <p class="note warn" role="status">{STILL_HINT}</p>
   {/if}
 </div>
 
@@ -117,7 +79,4 @@
   .db { flex: none; width: 5.5em; text-align: right; font-family: var(--mono); font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
   .note { margin: 0; font-size: 13px; line-height: 1.6; color: var(--muted); }
   .warn { color: var(--warn); }
-  .ok { color: var(--ok); }
-  .test { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 16px; }
-  .advice { margin: 0; padding-left: 1.2em; display: flex; flex-direction: column; gap: 4px; font-size: 13px; line-height: 1.6; color: var(--text); }
 </style>

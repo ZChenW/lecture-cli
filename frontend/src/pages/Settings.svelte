@@ -52,7 +52,6 @@
       </a>
       <h1>设置</h1>
     </div>
-    <span class="aside">改动在每一节单独保存</span>
   </header>
 
   <div class="columns">
@@ -69,27 +68,27 @@
       {#if app.boot && !app.boot.configured}
         <p class="unfinished">还差几项设置，补齐后才能开始上课。也可以回到 <a href="#/onboarding">首次设置</a> 逐步完成。</p>
       {/if}
-      <SettingsSection id="courses" title="课程目录" gap={18} about="每个子文件夹是一门课。笔记保存到 子文件夹 / LectureNotes。"
+      <SettingsSection id="courses" title="课程目录" gap={18}
         onsave={() => courses!.save()}>
         <CoursesDirForm bind:this={courses} />
       </SettingsSection>
-      <SettingsSection id="asr" title="转录" about="上课时把声音变成文字的方式。本地转录不上传音频。" onsave={() => asr!.save()}>
+      <SettingsSection id="asr" title="转录" onsave={() => asr!.save()}>
         <AsrForm bind:this={asr} settings />
       </SettingsSection>
-      <SettingsSection id="refine" title="课后校正" about="下课后把整节课的录音重新转录一遍，修正实时转录的错漏。可以在本机用 Qwen，也可以交给云端转录服务。"
+      <SettingsSection id="refine" title="课后校正"
         onsave={() => refine!.save()}>
         <RefineForm bind:this={refine} />
       </SettingsSection>
-      <SettingsSection id="notes" title="笔记服务" about="把转录整理成中文笔记的模型。任何 OpenAI 兼容的服务都可以。" onsave={() => notes!.save()}>
+      <SettingsSection id="notes" title="笔记服务" onsave={() => notes!.save()}>
         <NotesForm bind:this={notes} settings />
       </SettingsSection>
-      <SettingsSection id="mic" title="麦克风" about="上课时录音用的输入设备，以及声音过大时是否自动调低音量。" onsave={() => mic!.save()}>
+      <SettingsSection id="mic" title="麦克风" onsave={() => mic!.save()}>
         <MicForm bind:this={mic} />
       </SettingsSection>
-      <SettingsSection id="open" title="打开方式" about="在笔记旁打开文件夹、终端和编辑器时用哪个程序。" onsave={() => open!.save()}>
+      <SettingsSection id="open" title="打开方式" onsave={() => open!.save()}>
         <OpenersForm bind:this={open} />
       </SettingsSection>
-      <SettingsSection id="checks" title="环境检查" about="检查本地依赖、模型、麦克风和两个服务的连接；会向服务发送一次很小的测试请求。">
+      <SettingsSection id="checks" title="环境检查">
         <ChecksPanel auto={false} onfix={show} fixText={(t) => `前往「${SECTIONS.find((s) => s.id === t)?.label}」`} />
       </SettingsSection>
     </main>
@@ -121,7 +120,6 @@
   .title { display: flex; align-items: center; gap: 20px; }
   .back { display: flex; align-items: center; justify-content: center; width: 44px; height: 44px; margin-left: -12px; color: #111111; }
   h1 { font-family: "Noto Serif CJK SC", serif; font-weight: 600; font-size: 20px; }
-  .aside { font-family: "DM Mono", monospace; font-size: 12px; color: #5C5C5A; }
   .columns { flex: 1; display: flex; flex-wrap: wrap; }
   nav {
     flex: 1 1 200px;
