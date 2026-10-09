@@ -77,7 +77,7 @@ def test_two_consecutive_windows_lower_by_6_db_with_a_banner(fake_wpctl):
 
 def test_a_lowering_takes_the_ceiling_down(fake_wpctl):
     gain = calibrated(fake_wpctl)
-    assert gain.ceiling > 0.5
+    assert gain.ceiling > 0.45  # GUI5-fix: estimated 2 dB under the target, 0.3 · 10^(13/60) ≈ 0.49 (was > 0.5)
     feed(gain, CLIP, 2)
     assert gain.ceiling == pytest.approx(0.3 * mic_gain.GAIN_STEP) == gain.volume
     assert not any(feed(gain, QUIET, 3 * RAISE_WINDOWS))  # never above it again

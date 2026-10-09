@@ -114,7 +114,8 @@ async def calibrate(gain, listener, state: dict, publish, clock=time.monotonic) 
     finally:
         listener.close()
     if result is not None:
-        verdict = judge(list(result.levels), volume=result.volume, settled=not result.timed_out)
+        # GUI5-fix: "dead" when lowering the volume left the background where it was (or at the floor).
+        verdict = judge(list(result.levels), volume=result.volume, settled=result.unmoved)
         if verdict == "dead":
             state["mic_verdict"] = verdict_text(verdict)
 

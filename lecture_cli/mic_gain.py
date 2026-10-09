@@ -2,9 +2,11 @@
 
 PLAN-GUI-5 R2 replaces the fourth round's "lower only, raise back to the start value":
 
-- R2.1, before any audio reaches recognition: lower the volume in 6 dB steps until a short
-  background measurement neither clips nor exceeds BACKGROUND_TARGET. That volume is the run's
-  ceiling. The audio heard meanwhile is never recognised, counted or archived.
+- R2.1, before any audio reaches recognition (GUI5-fix): 18 dB down while a short background
+  measurement clips, then straight to the volume computed from it (CALIBRATE_MARGIN under
+  BACKGROUND_TARGET), confirmed by one more measurement and corrected at most once. A volume where the
+  background met the target is the run's ceiling; an unmet target is never remembered. The audio
+  heard meanwhile is never recognised, counted or archived.
 - R2.2, during the lecture: two consecutive 2 s clipping windows lower it by 6 dB and the ceiling
   follows. It goes up by 6 dB, never above the ceiling, once 60 s have passed since the last
   change, text was confirmed in those 60 s and the peaks under that text stay below
@@ -12,7 +14,7 @@ PLAN-GUI-5 R2 replaces the fourth round's "lower only, raise back to the start v
   All time is recorded audio, so pauses never count.
 - R2.3: judge() is the one verdict on a stretch of background ("high", "dead" or ""), shared by
   the start dialog's level bar, the start of a recording and `lecture doctor --mic-test`.
-- R2.4: the last volume and ceiling per source (node.name) are kept in mic-levels.json.
+- R2.4: the last volume and ceiling per source (node.name) are kept in mic-levels.json, when R2.1 met the target.
 """
 from __future__ import annotations
 
@@ -49,6 +51,14 @@ CALIBRATE_SETTLE = 0.3     # after each step, audio left to settle (discarded)
 CALIBRATE_MEASURE = 0.5    # then measured again
 CALIBRATE_STEPS = 10
 CALIBRATE_TIMEOUT = 6.0    # never hold the lecture up longer; carry on with the value reached
+# GUI5-fix: the start adjustment computes its step instead of walking 6 dB at a time. PipeWire's volume v
+# is the linear gain v³, so a change of D dB is v · 10^(D/60) (GAIN_STEP is the 6 dB case); PLAN-GUI-5
+# section 0's measured table follows this closely (about 61 dB per tenfold volume between 60 % and 10 %).
+CLIP_DROP_DB = 18.0        # a clipped measurement says too little about the real level: first this much down
+CALIBRATE_MARGIN = 2.0     # dB under BACKGROUND_TARGET the computed step aims at (the table is a little steeper
+                           # than v³ near the target, so aiming at the target itself lands just above it)
+CALIBRATE_CORRECTIONS = 1  # computed steps after the first one, at most
+MOVED_DB = 3.0             # lowering by 6 dB or more that moves the background less than this: it is not the room
 CALIBRATING = "正在调整麦克风音量"
 # PLAN-GUI-5 R2.3: the shared verdict.
 BLOCK_SAMPLES = 1600       # 100 ms, the level bar's block
@@ -142,7 +152,8 @@ def judge(levels: list[dict], *, adjusts: bool = True, volume: float | None = No
 
     high: the background clips (HIGH_CLIPPED_SHARE of the blocks) or its median is above HIGH_DBFS.
     dead: otherwise, background above -45 dBFS that moves less than 3 dB, when no adjustment can
-    explain it any more: R2.1 finished (settled) or this input is never adjusted (adjusts False); or
+    explain it any more: R2.1 lowered the volume and the background did not follow (settled) or this
+    input is never adjusted (adjusts False); or
     the volume is already at the 10 % floor and the background is still above BACKGROUND_TARGET.
     The start dialog has neither, so before a lecture "dead" only follows from the floor."""
     if not levels:
@@ -177,6 +188,9 @@ class Calibration:
     steps: int
     timed_out: bool
     levels: tuple = ()     # its 100 ms blocks, for judge()
+    reached: bool = False  # GUI5-fix: the last measurement met BACKGROUND_TARGET without clipping
+    unmoved: bool = False  # the volume went down 6 dB or more and the background did not follow
+    path: tuple = ()       # (seconds since the start, volume, background dBFS, clipped) per measurement
 
 
 class Listener:
@@ -332,14 +346,25 @@ class MicGain:
             self.pending_clip = False  # A clipping run never spans a pause.
 
     async def calibrate(self, listen, clock=time.monotonic) -> Calibration | None:
-        """PLAN-GUI-5 R2.1, before any audio reaches recognition. listen(seconds) returns that much
-        input (Listener.listen). Starts from the volume remembered for this source when there is one;
-        then lowers by 6 dB while the background clips or is above BACKGROUND_TARGET, at most
-        CALIBRATE_STEPS times, never below MIN_VOLUME and not past CALIBRATE_TIMEOUT. No banner."""
+        """PLAN-GUI-5 R2.1 as changed by GUI5-fix, before any audio reaches recognition. listen(seconds)
+        returns that much input (Listener.listen). Starts from the volume remembered for this source when
+        there is one, then measures the background for CALIBRATE_FIRST seconds:
+
+        - clipping: down CLIP_DROP_DB (again while it still clips);
+        - above BACKGROUND_TARGET: straight to the volume computed from the measurement (aiming
+          CALIBRATE_MARGIN under the target), measured again to confirm, and corrected at most
+          CALIBRATE_CORRECTIONS more times the same way;
+        - at or below it: no step (never raised here unless a clipping drop went too far).
+
+        Each step waits CALIBRATE_SETTLE and measures CALIBRATE_MEASURE seconds; never below MIN_VOLUME,
+        at most CALIBRATE_STEPS steps and not past CALIBRATE_TIMEOUT. The run's ceiling is a volume at
+        which the background met the target; when it was never met, the volume reached (R2.2 never
+        raises above it) and nothing is remembered (publish: mic_target_met). No banner."""
         if not self.active:
             return None
         begin = clock()
-        steps = 0
+        steps = computed = 0
+        path = []
         try:
             self.node = source_name(self.runner)
             last = remembered(self.node)
@@ -348,26 +373,49 @@ class MicGain:
                 if abs(last - self.volume) > SAME_VOLUME:
                     self.set(last)
             rms, clipped, levels = background(await listen(CALIBRATE_FIRST))
-            while ((clipped or rms > BACKGROUND_TARGET) and steps < CALIBRATE_STEPS
-                   and self.volume > MIN_VOLUME + 1e-9 and clock() - begin < CALIBRATE_TIMEOUT):
-                self.set(max(MIN_VOLUME, self.volume * GAIN_STEP))
+            path.append((clock() - begin, self.volume, rms, clipped))
+            clipped_at = None  # the lowest volume that clipped: a computed step stays under it
+            while ((clipped or rms > BACKGROUND_TARGET or (clipped_at and computed == 0)) and steps < CALIBRATE_STEPS
+                   and clock() - begin < CALIBRATE_TIMEOUT):
+                if clipped:
+                    clipped_at = self.volume
+                    target = self.volume * 10 ** (-CLIP_DROP_DB / 60)
+                else:
+                    if computed > CALIBRATE_CORRECTIONS:
+                        break
+                    computed += 1
+                    target = self.volume * 10 ** ((BACKGROUND_TARGET - CALIBRATE_MARGIN - rms) / 60)
+                    if clipped_at is not None:
+                        target = min(target, clipped_at * GAIN_STEP)
+                    else:
+                        target = min(target, self.volume)
+                target = max(MIN_VOLUME, min(1.0, target))
+                if abs(target - self.volume) <= 1e-6:
+                    break  # at the floor (or nothing left to change)
+                self.set(target)
                 steps += 1
                 await listen(CALIBRATE_SETTLE)
                 rms, clipped, levels = background(await listen(CALIBRATE_MEASURE))
+                path.append((clock() - begin, self.volume, rms, clipped))
         except VolumeError as exc:
             self.active = False
             self.notice = str(exc)
             return None
-        loud = clipped or rms > BACKGROUND_TARGET
-        if steps or loud:
-            ceiling = self.volume  # one step higher was (or this one still is) too loud
+        reached = not clipped and rms <= BACKGROUND_TARGET
+        if reached and not steps:
+            # No step was needed: the ceiling is where the background would reach the target (with the
+            # same margin as a computed step), at most 100 %.
+            ceiling = max(self.volume, min(1.0, self.volume * 10 ** ((BACKGROUND_TARGET - CALIBRATE_MARGIN - rms) / 60)))
         else:
-            # No step was needed: the ceiling is where the background would reach the target
-            # (PipeWire's volume is the cube root of the gain, so 6 dB is GAIN_STEP), at most 100 %.
-            ceiling = max(self.volume, min(1.0, self.volume * 10 ** ((BACKGROUND_TARGET - rms) / 60)))
+            # Measured to meet the target here; or never met, so never raised above where it stopped.
+            ceiling = self.volume
         self.ceiling = ceiling
+        first = next(((v, r) for _, v, r, c in path if not c), None)
+        unmoved = bool(first and 60 * math.log10(first[0] / self.volume) >= 6 and first[1] - rms < MOVED_DB)
         self.calibration = Calibration(self.volume, ceiling, round(rms, 1), clipped, steps,
-                                       loud and clock() - begin >= CALIBRATE_TIMEOUT, tuple(levels))
+                                       not reached and clock() - begin >= CALIBRATE_TIMEOUT, tuple(levels),
+                                       reached, unmoved,
+                                       tuple((round(t, 3), round(v, 6), round(r, 1), c) for t, v, r, c in path))
         self.notice = f"{self.volume:.0%} · 自动调节麦克风音量已启用"
         with self.lock:
             self.clipped = self.total = 0
@@ -497,7 +545,8 @@ class MicGain:
             state["gain_change"] = self.change  # Plan GUI-4 Q2.3: GUI banner only, never the note.
         if self.active and self.calibration is not None:
             # PLAN-GUI-5 R2.1/R2.4: the bottom bar's "22% · 自动", and what a normal end remembers.
-            state.update(mic_volume=round(self.volume, 6), mic_ceiling=round(self.ceiling, 6), mic_node=self.node)
+            state.update(mic_volume=round(self.volume, 6), mic_ceiling=round(self.ceiling, 6), mic_node=self.node,
+                         mic_target_met=self.calibration.reached)  # GUI5-fix: only then is it remembered
         elif not self.active:
             state.pop("mic_volume", None)
 
@@ -544,5 +593,8 @@ def restore_volume(start, adjusted, runner=None) -> str:
 
 
 def remember_levels(state: dict) -> bool:
-    """PLAN-GUI-5 R2.4, from the controller after a normal end: the capture's last volume and ceiling."""
+    """PLAN-GUI-5 R2.4, from the controller after a normal end: the capture's last volume and ceiling.
+    GUI5-fix: only when the start adjustment met the target; a ceiling never measured is not kept."""
+    if state.get("mic_target_met") is not True:
+        return False
     return remember(state.get("mic_node"), state.get("mic_volume"), state.get("mic_ceiling"))
