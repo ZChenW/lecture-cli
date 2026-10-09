@@ -73,22 +73,20 @@
   {#if info}
     {#each KINDS as kind (kind)}
       <div class="field">
-        <span id="opener-{kind}">{info[kind].label}</span>
+        <span id="opener-{kind}" title={info[kind].custom ? "在 config.json 中设置；要改用列表中的程序，请删除该项" : NOTES[kind]}>{info[kind].label}</span>
         <div class="line">
           <Select labelledby="opener-{kind}" mono={info[kind].custom ? false : choice[kind] !== ""} options={options(kind)}
             bind:value={choice[kind]} disabled={info[kind].custom} onchange={() => delete tries[kind]} />
-          <button type="button" class="text-action" onclick={() => test(kind)} disabled={busy === kind}>
+          <button type="button" class="text-action" onclick={() => test(kind)} disabled={busy === kind}
+            title="用当前选中的程序打开课程目录（编辑器打开一个示例文件），不会保存选择">
             {busy === kind ? "正在启动…" : "试一下"}
           </button>
         </div>
         {#if tries[kind]}
           <span class="field-note" class:error-text={!tries[kind]!.ok} role="status">{tries[kind]!.text}</span>
-        {:else}
-          <span class="field-note">{info[kind].custom ? "在 config.json 中设置；要改用列表中的程序，请删除该项" : NOTES[kind]}</span>
         {/if}
       </div>
     {/each}
-    <p class="field-note">「试一下」用当前选中的程序打开课程目录（编辑器打开一个示例文件），不会保存选择。</p>
   {:else if !error}
     <p class="field-note" role="status">正在查找已安装的程序…</p>
   {/if}

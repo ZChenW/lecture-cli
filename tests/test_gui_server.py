@@ -8,6 +8,7 @@ import os
 import posixpath
 import re
 from pathlib import Path
+import signal
 import socket
 import sqlite3
 import subprocess
@@ -632,6 +633,38 @@ def test_gui_no_window_serves_and_quits(home, tmp_path):
             assert client.post(base + "/api/quit", headers={"Origin": base}).json() == {"ok": True}
         assert process.wait(timeout=15) == 0
         assert not (runtime / "gui.json").exists()
+    finally:
+        if process.poll() is None:
+            process.kill()
+            process.wait()
+
+
+@pytest.mark.parametrize("command", [["gui", "--no-window"], ["gui"]])
+def test_ctrl_c_ends_the_gui_quietly(home, tmp_path, command):
+    """GUI5-fix: SIGINT (Ctrl+C in the terminal) ends `lecture gui` with exit code 0, no traceback, and
+    removes gui.json. Without --no-window the browser launcher is a fake that only records its call."""
+    bin_dir = tmp_path / "fake-bin"
+    bin_dir.mkdir()
+    for name in ("chromium", "chromium-browser", "google-chrome", "google-chrome-stable", "brave-browser",
+                 "brave", "microsoft-edge", "microsoft-edge-stable", "xdg-open", "gio"):
+        (bin_dir / name).write_text(f"#!/bin/sh\necho \"$0 $*\" >> {tmp_path}/opened.log\n")
+        (bin_dir / name).chmod(0o755)
+    env = {**os.environ, "PYTHONPATH": str(ROOT), "PATH": f"{bin_dir}:{os.environ['PATH']}"}
+    env.pop("DISPLAY", None)
+    process = subprocess.Popen([sys.executable, "-m", "lecture_cli", *command], env=env, stdin=subprocess.DEVNULL,
+                               stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+    runtime = tmp_path / "runtime" / "lecture-cli"
+    try:
+        url = wait_until(lambda: (runtime / "gui.json").exists() and json.loads((runtime / "gui.json").read_text()).get("url"))
+        with httpx.Client(trust_env=False, timeout=10) as client:
+            assert client.get(url.split("/?")[0] + "/api/bootstrap").status_code in (200, 401, 403)
+        process.send_signal(signal.SIGINT)
+        output, _ = process.communicate(timeout=15)
+        assert process.returncode == 0, output
+        assert "Traceback" not in output and "KeyboardInterrupt" not in output, output
+        assert not (runtime / "gui.json").exists()
+        if command == ["gui"]:
+            assert f"--app={url}" in (tmp_path / "opened.log").read_text()
     finally:
         if process.poll() is None:
             process.kill()

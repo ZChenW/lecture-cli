@@ -41,7 +41,9 @@ KEEPALIVE_SECONDS = 15
 # live model (Qwen not ready, or language 自动); the lecture uses asr_model, the course keeps its choice.
 OVERRIDES = {"language", "interval", "refine", "auto_gain", "context_path", "demo", "asr_model", "remember_asr_model"}
 SENTINELS = {"pause": ("pause", True), "resume": ("pause", False), "stop": ("stop", True),
-             "skip-refine": ("skip-refine", True), "discard": ("discard", True)}
+             "skip-refine": ("skip-refine", True), "discard": ("discard", True),
+             # PLAN-GUI-5 R2.6: the steady-noise notice was closed; it stays away for this recording.
+             "dismiss-still": ("dismiss-still", True)}
 OPEN_MODES = ("reveal", "terminal", "editor")
 DEVICE_NOTES = {
     "default": "不选择设备时使用系统默认输入，推荐。",
@@ -346,14 +348,17 @@ def create_app(port: int, token: str, *, on_quit=None, sessions: Sessions | None
         return JSONResponse({"devices": listed, "selected": settings.load().get("device"), "notes": DEVICE_NOTES})
 
     async def mic_level(request):
-        """Plan GUI-4 Q1.5: RMS and peak of the configured input every 100 ms, as server-sent events.
-        Levels only, never audio. ?test=1 listens 5 s and ends with the test's result; otherwise
-        the first 2 s end with the start dialog's passive verdict and levels go on until the page
-        disconnects. Refused while a lecture records; a lecture that starts meanwhile ends it."""
+        """RMS, peak and clipping of the configured input every 100 ms, as server-sent events. Levels
+        only, never audio. After the first 2 s comes PLAN-GUI-5 R2.3's verdict ("verdict": high, dead
+        or "", with its text); the bar only looks, it never changes the volume. Levels go on until the
+        page disconnects. Refused while a lecture records; a lecture that starts meanwhile ends it."""
         from .. import mic_check
+        from ..mic_gain import gain_applies, start_volume
         if await run_in_threadpool(sessions.active):
             raise ApiError(409, "busy", "录制进行中，不能同时测试麦克风")
-        testing = request.query_params.get("test") == "1"
+        config = settings.load()
+        meta = {"device": config.get("device"), "auto_gain": config.get("auto_gain", True)}
+        adjusts = gain_applies(meta)
         loop = asyncio.get_running_loop()
         blocks: asyncio.Queue = asyncio.Queue()
 
@@ -364,7 +369,7 @@ def create_app(port: int, token: str, *, on_quit=None, sessions: Sessions | None
                 pass
 
         def start():
-            stream = (mic_stream or mic_check.open_stream)(settings.load().get("device"), callback)
+            stream = (mic_stream or mic_check.open_stream)(config.get("device"), callback)
             stream.start()
             return stream
 
@@ -391,13 +396,12 @@ def create_app(port: int, token: str, *, on_quit=None, sessions: Sessions | None
                         continue
                     levels.append(level)
                     yield f"event: level\ndata: {json.dumps(level)}\n\n"
-                    if testing and len(levels) == round(mic_check.TEST_SECONDS / mic_check.BLOCK_SECONDS):
-                        yield f"event: result\ndata: {json.dumps(mic_check.evaluate(levels))}\n\n"
-                        return
-                    if not testing and len(levels) == round(mic_check.PASSIVE_SECONDS / mic_check.BLOCK_SECONDS):
-                        yield f"event: still\ndata: {json.dumps({'still': mic_check.still(levels)})}\n\n"
-                    if not testing:
-                        levels = levels[-100:]  # Only the first 2 s matter; never grow without bound.
+                    if len(levels) == round(mic_check.PASSIVE_SECONDS / mic_check.BLOCK_SECONDS):
+                        # The floor rule needs the volume; wpctl only runs when this input is adjusted.
+                        volume = await run_in_threadpool(start_volume, meta) if adjusts else None
+                        result = mic_check.verdict(levels, adjusts=adjusts, volume=volume)
+                        yield f"event: verdict\ndata: {json.dumps(result, ensure_ascii=False)}\n\n"
+                    levels = levels[-100:]  # Only the first 2 s matter; never grow without bound.
             finally:
                 # Disconnect, end of test or a starting lecture: the device is released at once.
                 # Synchronously: a disconnect cancels this generator, so nothing here may await.

@@ -3,7 +3,7 @@
   // address and key (the key only reaches the refinement process) and says that audio is uploaded.
   import { api } from "../lib/api";
   import type { ListOption } from "../lib/listbox";
-  import { DEFAULT_API_MODEL, QWEN_NOTE, UPLOAD_NOTICE, refineChanges, refineChoice, type RefineChoice } from "../lib/refine";
+  import { DEFAULT_API_MODEL, UPLOAD_NOTICE, refineChanges, refineChoice, type RefineChoice } from "../lib/refine";
   import { app, message } from "../lib/state.svelte";
   import type { AsrModel, Result } from "../lib/types";
   import Choices from "./Choices.svelte";
@@ -68,10 +68,11 @@
 <div class="form">
   <div class="field">
     <span class="label">下课后</span>
+    <!-- PLAN-GUI-5 R1: the explanations are tooltips; the upload notice is the one line kept. -->
     <Choices label="课后校正" bind:value={choice} options={[
-      { value: "local", title: "本机 Qwen", text: "在本机把整节课重新转录一遍，终稿更准确，但下课后要多等几分钟。" },
-      { value: "api", title: "云端 API", text: "把录音分段上传到转录服务重新转录，不占用本机显卡。" },
-      { value: "off", title: "不校正", text: "下课后马上得到笔记，依据上课时的实时转录。" },
+      { value: "local", title: "本机 Qwen", tag: "中文推荐", tip: "在本机把整节课重新转录一遍，终稿更准确，但下课后要多等几分钟" },
+      { value: "api", title: "云端 API", text: UPLOAD_NOTICE, tip: "把录音分段上传到转录服务重新转录，不占用本机显卡；地址和 key 与「转录」一节相同" },
+      { value: "off", title: "不校正", tip: "下课后马上得到笔记，依据上课时的实时转录" },
     ]} />
     {#if cloudLive && choice !== "off"}
       <span class="field-note">实时转录使用云端 API 时，下课后不进行校正。</span>
@@ -79,10 +80,6 @@
   </div>
 
   {#if choice === "api"}
-    <div class="notice">
-      <p class="first">{UPLOAD_NOTICE}</p>
-      <p>{QWEN_NOTE}。转录服务的地址和 key 与「转录」一节相同。</p>
-    </div>
     <div class="grid">
       <label class="field">
         <span>校正模型</span>
@@ -124,10 +121,6 @@
   .form { display: flex; flex-direction: column; gap: 28px; }
   .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(220px, 100%), 1fr)); gap: 28px 32px; }
   .warn-text.field-note { color: var(--warn); }
-  /* Plan GUI-3 item 2: two plain lines, no rule or indent; the first in body colour. */
-  .notice { display: flex; flex-direction: column; gap: 2px; }
-  .notice p { margin: 0; font-size: 13px; line-height: 1.7; color: var(--muted); }
-  .notice .first { font-size: 14px; color: var(--text); }
   /* One line of monospace text and a link, like the other read-only details. */
   .readonly { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 16px; min-height: 44px; margin: 0; padding-top: 10px; font-size: 14px; }
   .readonly .address { color: var(--text); overflow-wrap: anywhere; }

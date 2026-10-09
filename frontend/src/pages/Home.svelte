@@ -114,7 +114,7 @@
   <nav class="courses" class:none={noFolder && !error} aria-label="课程">
     <p class="label">课程</p>
     {#if error}<p class="error-text" role="alert">{error}</p>{/if}
-    {#if courses?.length === 0 && !noFolder}<p class="hint">还没有课程，先新建一门。</p>{/if}
+    {#if courses?.length === 0 && !noFolder}<p class="hint">还没有课程</p>{/if}
     <ul>
       {#each courses ?? [] as course (course.name)}
         <li>
@@ -148,7 +148,6 @@
     {#if noFolder}
       <section class="empty-state" aria-labelledby="empty-title">
         <h1 id="empty-title">还没有课程目录</h1>
-        <p>选一个文件夹，它的每个子文件夹是一门课；笔记保存在各门课的 LectureNotes 里。</p>
         <button type="button" class="btn primary large" onclick={() => settings("courses")}>选择课程目录</button>
         {#if missing.length > 1}
           <p class="missing">另外还差：{#each missing.filter((m) => m !== "courses_dir") as item, i (item)}{#if i}、{/if}<a
@@ -168,7 +167,7 @@
       {#if notesError}<p class="error-text" role="alert">{notesError}</p>{/if}
       {#if rowError}<p class="error-text row-error" role="alert">{rowError}</p>{/if}
       {#if notes?.length === 0}
-        <p class="empty">这门课还没有笔记。点“开始上课”录下第一节。</p>
+        <p class="empty">这门课还没有笔记</p>
       {/if}
       <ul>
         {#each notes ?? [] as note, i (note.name)}

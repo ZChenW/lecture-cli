@@ -79,7 +79,11 @@ def test_it_comes_before_the_weak_input_notice():
     level = WeakInput()
     count = feed(level, 30, -42, texts_every=3)
     assert level.notice == NOTICE
-    feed(level, 30, -42, start_count=count)
+    # PLAN-GUI-5 R2.6: past the first 30 s the levels must hold still for 120 s (was 30); the
+    # last text came with second 30, so the 120 s run from there.
+    feed(level, 118, -42, start_count=count)
+    assert level.notice == NOTICE
+    feed(level, 1, -42, start_count=count)
     assert level.weak == NOTICE and level.notice == STILL
 
 

@@ -48,26 +48,25 @@
 
 <div class="form">
   <div class="field">
-    <span id="mic-device-{look}">输入设备</span>
+    <!-- PLAN-GUI-5 R1: the backend's notes on the default input are a tooltip, not a line. -->
+    <span id="mic-device-{look}" title={devices ? `${devices.notes.default} ${devices.notes.pipewire}` : undefined}>输入设备</span>
     <Select labelledby="mic-device-{look}" {options} bind:value={choice} />
-    {#if devices}
-      <span class="field-note">{devices.notes.default} {devices.notes.pipewire}</span>
-    {:else if unavailable}
+    {#if unavailable}
       <span class="field-note warn-text">{unavailable}；仍可使用系统默认麦克风。</span>
     {/if}
   </div>
   <div class="field">
     <span id="mic-level-{look}">电平</span>
-    <div aria-labelledby="mic-level-{look}" role="group">
-      <MicLevel test bind:this={meter} />
+    <div aria-labelledby="mic-level-{look}" role="group"
+      title={saved !== choice ? "电平条显示的是已保存的输入设备，保存后改为新选的设备" : undefined}>
+      <MicLevel bind:this={meter} />
     </div>
-    {#if saved !== choice}<span class="field-note">电平条显示的是已保存的输入设备，保存后改为新选的设备。</span>{/if}
   </div>
   <div class="field">
-    <span class="label">自动调节音量</span>
-    <Choices label="自动调节音量" bind:value={autoGain} options={[
-      { value: "on", title: "开", text: "连续削波时自动调低系统默认麦克风的音量，之后声音偏弱时再调回，最多回到开始时的音量。只对系统默认输入生效。" },
-      { value: "off", title: "关", text: "不改动系统音量。" },
+    <span class="label">自动调节麦克风音量</span>
+    <Choices label="自动调节麦克风音量" bind:value={autoGain} options={[
+      { value: "on", title: "开" },
+      { value: "off", title: "关" },
     ]} />
   </div>
   {#if error}<p class="error-text" role="alert">{error}</p>{/if}

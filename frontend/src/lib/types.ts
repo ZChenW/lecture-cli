@@ -100,6 +100,10 @@ export interface Snapshot {
     weak_input?: string | null;
     /** Plan GUI-4 Q2.3: the latest automatic mic volume change; GUI only, never in the note. */
     gain_change?: { id: number; text: string } | null;
+    /** PLAN-GUI-5 R2.1: the volume the automatic adjustment keeps now, 0–1. */
+    mic_volume?: number | null;
+    /** PLAN-GUI-5 R2.3: shown after the opening adjustment when the microphone looks dead. */
+    mic_verdict?: string | null;
   };
   transcript: {
     count: number; tail: { id: number; start: string; end: string; text: string }[]; pending: string;
@@ -122,5 +126,6 @@ export interface RunRecord {
 }
 
 /** Plan GUI-4 Q1.5: GET /api/mic/level, one event every 100 ms. */
-export interface MicLevel { rms: number; peak: number }
-export interface MicTestResult { passed: boolean; floor: number; peak: number; rise: number }
+export interface MicLevel { rms: number; peak: number; clipped?: boolean }
+/** PLAN-GUI-5 R2.3: "high", "dead" or "" (fine, nothing shown). */
+export interface MicVerdict { verdict: "high" | "dead" | ""; text: string }

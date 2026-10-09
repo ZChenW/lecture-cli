@@ -2,7 +2,10 @@
   // Plan section 1, rule 1: no rounded cards with radio dots. The light UI uses underlined
   // segments (design/D-settings.reference.html), the dark UI full rows separated by thin lines
   // (design/E-wizard.reference.html). Both are a radiogroup with roving focus and arrow keys.
-  interface Option { value: string; title: string; text?: string; aside?: string }
+  // PLAN-GUI-5 R1: text is only a notice given where the choice is made (e.g. the upload notice);
+  // tag is a two-or-three-character recommendation after the title ("中文推荐", as in the start
+  // dialog); tip is a hover explanation that takes no room.
+  interface Option { value: string; title: string; text?: string; aside?: string; tag?: string; tip?: string }
   let { label, options, value = $bindable(), look = "tabs", compact = false, onchange }: {
     label: string; options: Option[]; value: string; look?: "tabs" | "rows"; compact?: boolean;
     onchange?: (value: string) => void;
@@ -35,16 +38,16 @@
   {#each options as option (option.value)}
     {@const selected = option.value === value}
     <button type="button" role="radio" aria-checked={selected} tabindex={selected || (!current && option === options[0]) ? 0 : -1}
-      class:selected onclick={() => choose(option.value)}>
+      class:selected title={option.tip} onclick={() => choose(option.value)}>
       {#if look === "rows"}
         <span class="dot" aria-hidden="true"></span>
         <span class="body">
-          <span class="title">{option.title}</span>
+          <span class="title">{option.title}{#if option.tag}<span class="tag">{option.tag}</span>{/if}</span>
           {#if option.text}<span class="text">{option.text}</span>{/if}
         </span>
         {#if option.aside}<span class="aside">{option.aside}</span>{/if}
       {:else}
-        {option.title}
+        {option.title}{#if option.tag}<span class="tag">{option.tag}</span>{/if}
       {/if}
     </button>
   {/each}
@@ -68,6 +71,8 @@
   }
   .tabs button:first-child { padding-left: 2px; }
   .tabs button.selected { border-bottom-color: var(--fg); color: var(--fg); font-weight: 600; }
+  /* The start dialog's segment aside: 12px, regular weight, muted. */
+  .tag { margin-left: 8px; font-size: 12px; font-weight: 400; color: var(--muted); }
   .tabs button:hover:not(.selected) { color: var(--fg); }
   .tabs button:focus-visible { outline-offset: -2px; }
   .about { margin: 6px 0 0; font-size: 13px; line-height: 1.7; color: var(--label); }
@@ -90,6 +95,8 @@
   .selected .dot { border: none; background: var(--accent); }
   .body { flex: 1; display: flex; flex-direction: column; gap: 6px; min-width: 0; }
   .title { font-size: 26px; font-weight: 300; line-height: normal; }
+  .rows .tag { margin-left: 12px; color: #8E9096; vertical-align: middle; }
+  .rows .selected .tag { color: #A9ABB0; }
   .selected .title { font-weight: 400; }
   .text { font-size: 14px; line-height: normal; color: #8E9096; }
   .selected .text { color: #A9ABB0; }

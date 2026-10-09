@@ -34,6 +34,8 @@ export function bannerItems(asr: Snapshot["asr"]): Notice[] {
   if (asr.weak_input) items.push({ kind: "weak", text: asr.weak_input });
   // Plan GUI-4 Q2.3: each automatic volume change, lowered or raised, gets a banner that can be closed.
   if (asr.gain_change?.text) items.push({ kind: "gain_change", text: asr.gain_change.text, id: asr.gain_change.id });
+  // PLAN-GUI-5 R2.3: after the opening adjustment, a microphone that still looks dead; it can be closed.
+  if (asr.mic_verdict && !items.some((item) => item.text === asr.mic_verdict)) items.push({ kind: "verdict", text: asr.mic_verdict });
   return items;
 }
 

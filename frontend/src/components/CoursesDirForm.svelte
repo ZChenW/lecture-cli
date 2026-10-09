@@ -57,6 +57,7 @@
   <div class="field">
     <label for="courses-dir">位置</label>
     <input id="courses-dir" class="input path" bind:value={path} placeholder="/home/你/Courses" spellcheck="false"
+      title="每个子文件夹是一门课，笔记保存到 子文件夹 / LectureNotes"
       onkeydown={(e) => e.key === "Enter" && save()} />
   </div>
   {#if error}<p class="error-text" role="alert">{error}</p>{/if}
@@ -70,8 +71,6 @@
       </div>
     </form>
     {#if courseError}<p class="error-text" role="alert">{courseError}</p>{/if}
-  {:else if !saved}
-    <p class="status">填写一个文件夹，它的每个子文件夹是一门课。</p>
   {/if}
 </div>
 

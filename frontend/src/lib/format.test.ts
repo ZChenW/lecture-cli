@@ -37,6 +37,10 @@ describe("snapshot view mapping", () => {
     expect(bannerItems({ ...asr, gain_change: { id: 2, text: "声音偏弱，麦克风音量已调回 100%" } }))
       .toEqual([{ kind: "gain_change", text: "声音偏弱，麦克风音量已调回 100%", id: 2 }]);
     expect(bannerItems({ ...asr, gain_change: null })).toEqual([]);
+    // PLAN-GUI-5 R2.3: a microphone that still looks dead after the opening adjustment.
+    expect(bannerItems({ ...asr, mic_verdict: "麦克风可能没有在工作：声音没有变化" }))
+      .toEqual([{ kind: "verdict", text: "麦克风可能没有在工作：声音没有变化" }]);
+    expect(bannerItems({ ...asr, mic_verdict: null })).toEqual([]);
   });
 
   it("adds the weak-input notice as its own closable banner (plan N3.4)", () => {

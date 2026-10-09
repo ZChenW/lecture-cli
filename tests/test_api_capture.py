@@ -30,8 +30,10 @@ def isolated_config(tmp_path, monkeypatch):
 
 
 def session(directory, **extra):
+    # auto_gain off: the one-shot fake streams here would otherwise be taken by the start
+    # calibration (PLAN-GUI-5 R2.1), which tests/test_mic_volume_auto.py covers.
     meta = dict(asr_backend="api", asr_api_base="https://example.invalid/v1/",
-                asr_api_model="whisper-large-v3-turbo", language="en", fast=True)
+                asr_api_model="whisper-large-v3-turbo", language="en", fast=True, auto_gain=False)
     meta.update(extra)
     write_json(directory / "session.json", meta)
     return meta

@@ -108,7 +108,10 @@ if "_capture" in sys.argv and os.environ.get("LECTURE_TEST_GAIN"):
     def run(directory, _run=capture.run):
         gain = mic_gain.MicGain(None)
         mic_gain.run_wpctl(["set-volume", mic_gain.SOURCE, "0.536313"], gain.runner)
-        write_json(directory / "asr-state.json", {"status": "test-ready", "gain_volume": 0.536313})
+        # PLAN-GUI-5 R2.4: what a calibrated capture publishes for mic-levels.json.
+        levels = {"mic_volume": 0.536313, "mic_ceiling": 0.6, "mic_node": "alsa_input.fake-test-mic",
+                  "mic_target_met": not os.environ.get("LECTURE_TEST_UNMET")}  # GUI5-fix: only a met target is remembered
+        write_json(directory / "asr-state.json", {"status": "test-ready", "gain_volume": 0.536313, **levels})
         manual = os.environ.get("LECTURE_TEST_MANUAL")
         if manual:
             mic_gain.run_wpctl(["set-volume", mic_gain.SOURCE, manual], gain.runner)
@@ -117,7 +120,7 @@ if "_capture" in sys.argv and os.environ.get("LECTURE_TEST_GAIN"):
         (directory / "test-ready").touch()
         while not (directory / "stop").exists():
             time.sleep(0.05)
-        write_json(directory / "asr-state.json", {"status": "转录完成", "gain_volume": 0.536313})
+        write_json(directory / "asr-state.json", {"status": "转录完成", "gain_volume": 0.536313, **levels})
         return 0
     capture.run = run
 '''
@@ -149,9 +152,17 @@ def volume(state):
     return json.loads(state.read_text())["volume"]
 
 
-@pytest.mark.parametrize("end", ["stop", "discard"])
-def test_normal_end_and_discard_put_the_start_volume_back(wpctl_runtime, end):
+def levels_file(tmp_path):
+    """PLAN-GUI-5 R2.4: mic-levels.json under the test's XDG_STATE_HOME (conftest), which children inherit."""
+    return tmp_path / "state" / "lecture-cli" / "mic-levels.json"
+
+
+@pytest.mark.parametrize("end", ["stop", "discard", "stop-unmet"])
+def test_normal_end_and_discard_put_the_start_volume_back(wpctl_runtime, end, tmp_path):
     root, env, state = wpctl_runtime
+    if end == "stop-unmet":  # GUI5-fix: the start adjustment timed out above the target
+        env["LECTURE_TEST_UNMET"] = "1"
+        end = "stop"
     proc = start(root, env)
     try:
         directory = wait_until(lambda: own_session(root))
@@ -164,6 +175,12 @@ def test_normal_end_and_discard_put_the_start_volume_back(wpctl_runtime, end):
         assert proc.returncode == 0, output
         assert volume(state) == 0.85
         assert "麦克风音量：已恢复为开始时的 85%。" in output
+        # PLAN-GUI-5 R2.4: only a normal end remembers the volume; a discarded lecture writes nothing.
+        if end == "stop" and not env.get("LECTURE_TEST_UNMET"):
+            entry = json.loads(levels_file(tmp_path).read_text())["alsa_input.fake-test-mic"]
+            assert entry["volume"] == 0.536313 and entry["ceiling"] == 0.6 and entry["updated"]
+        else:
+            assert not levels_file(tmp_path).exists()
     finally:
         if proc.poll() is None:
             proc.kill()
@@ -228,7 +245,7 @@ def test_without_wpctl_the_run_ends_normally(stub_runtime):
             proc.wait()
 
 
-def test_crashed_run_is_restored_on_the_next_launch(wpctl_runtime):
+def test_crashed_run_is_restored_on_the_next_launch(wpctl_runtime, tmp_path):
     root, env, state = wpctl_runtime
     proc = start(root, env)
     try:
@@ -256,6 +273,7 @@ def test_crashed_run_is_restored_on_the_next_launch(wpctl_runtime):
         assert volume(state) == 0.85, result.stdout + result.stderr
         assert "上次录制的麦克风音量：已恢复为开始时的 85%。" in result.stdout
         assert not directory.exists()
+        assert not levels_file(tmp_path).exists()  # PLAN-GUI-5 R2.4: a crashed lecture is not remembered
     finally:
         if proc.poll() is None:
             proc.kill()

@@ -1,5 +1,6 @@
 <script lang="ts">
-  import { bannerItems } from "../../lib/format";
+  import { api } from "../../lib/api";
+  import { bannerItems, weakLabel } from "../../lib/format";
   import type { Snapshot } from "../../lib/types";
 
   // Plan N2.5: banners only for warnings and errors. No outline; a dot carries the level and the
@@ -20,6 +21,9 @@
   });
 
   function close(item: { kind: string; text: string; id?: number }) {
+    // PLAN-GUI-5 R2.6: once closed, the "可能只是噪声" notice stays off for the whole recording; the
+    // capture process keeps that, so it holds across page changes. A failed request only means it may return.
+    if (item.kind === "weak" && weakLabel(item.text) === "可能只是噪声") api.control("dismiss-still").catch(() => {});
     if (item.kind === "weak") weakClosed = item.text;
     else if (item.kind === "gain_change") gainClosed = item.id ?? null;
     else dismissed = [...dismissed, item.text];

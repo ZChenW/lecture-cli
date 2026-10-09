@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
-  chapterStatus, closingHint, sinceText, joinText, mergeSegments, closingStages, gainState, refineEta, destinationLine, isTyping, levelShare, lyrics, micPercent, progressOf, pushLevel, savedPath, segmentTime, tailText, updatedAgo,
+  chapterStatus, closingHint, sinceText, joinText, mergeSegments, closingStages, gainState, recordingState, refineEta, destinationLine, isTyping, levelShare, lyrics, progressOf, pushLevel, savedPath, segmentTime, systemVolume, tailText, updatedAgo,
   waveBars, WAVE_BARS,
 } from "./record";
 import type { Snapshot } from "./types";
@@ -110,11 +110,10 @@ describe("lyrics", () => {
 });
 
 describe("footer and notes card", () => {
-  it("formats the update age and the microphone level", () => {
+  it("formats the update age", () => {
     expect(updatedAgo(null, 0)).toBe("");
     expect(updatedAgo(1000, 1000_000 + 30_000)).toBe("刚刚更新");
     expect(updatedAgo(1000, 1000_000 + 125_000)).toBe("2 分钟前更新");
-    expect(micPercent(0.084)).toBe("63%");
   });
 
   it("ignores keys typed into fields", () => {
@@ -169,6 +168,23 @@ describe("N2.5 recording texts", () => {
     expect(gainState(asr("80% · 自动调节麦克风音量已启用"))).toEqual({ cell: "自动调节开", detail: "80% · 自动调节麦克风音量已启用", warn: false });
     expect(gainState(asr("所选麦克风不是 PipeWire 默认源，未启用自动音量调节。"))?.cell).toBe("自动调节关");
     expect(gainState(asr("默认麦克风已静音；请手动取消静音，自动调节不会取消静音。"))?.warn).toBe(true);
+  });
+  it("shows the system volume as the cell's value once the opening adjustment chose it (GUI5-fix)", () => {
+    const base = snap({}).asr;
+    const on = { ...base, notices: [{ kind: "gain", text: "22% · 自动调节麦克风音量已启用" }] };
+    expect(systemVolume({ mic_volume: 0.2187 })).toBe("22%");
+    expect(gainState({ ...on, mic_volume: 0.2187 })?.cell).toBe("自动");
+    expect(systemVolume({ mic_volume: null })).toBe("");  // still adjusting: the cell shows "—"
+    expect(systemVolume({ mic_volume: Number.NaN })).toBe("");
+    expect(gainState({ ...on, mic_volume: null })?.cell).toBe("自动调节开");
+    const off = { ...base, notices: [{ kind: "gain", text: "所选麦克风不是 PipeWire 默认源，未启用自动音量调节。" }], mic_volume: 0.5 };
+    expect(gainState(off)?.cell).toBe("自动调节关");
+  });
+  it("shows 正在调整麦克风音量 while the volume is being set", () => {
+    const asr = (status: string) => ({ ...snap({}).asr, status });
+    expect(recordingState({ paused: false, asr: asr("正在调整麦克风音量") })).toBe("正在调整麦克风音量");
+    expect(recordingState({ paused: false, asr: asr("实时转录中") })).toBe("录制中");
+    expect(recordingState({ paused: true, asr: asr("正在调整麦克风音量") })).toBe("已暂停");
   });
 });
 

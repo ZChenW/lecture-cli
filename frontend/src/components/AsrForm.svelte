@@ -1,5 +1,6 @@
 <script lang="ts">
   import { api } from "../lib/api";
+  import { UPLOAD_NOTICE } from "../lib/refine";
   import type { ListOption } from "../lib/listbox";
   import { app, message } from "../lib/state.svelte";
   import type { AsrModel, Result } from "../lib/types";
@@ -86,15 +87,22 @@
     }
   }
 
+  // PLAN-GUI-5 R1: no "what this is" lines. The recommendation is a tag, the explanation a tooltip,
+  // and the only text left is the upload notice on the choice that uploads.
+  const tips = {
+    whisper: "在本机转录，音频不离开电脑；有 NVIDIA GPU 时更快",
+    qwen: "中文课堂更准，需要另装运行环境",
+    api: "没有显卡时用，音频会上传到 OpenAI 兼容的转录服务，需要 key",
+  };
   const modes = $derived(look === "rows" ? [
-    { value: "whisper", title: "本地 Whisper", text: "在本机转录，音频不离开电脑",
+    { value: "whisper", title: "本地 Whisper", tip: tips.whisper,
       aside: gpu == null ? "" : gpu ? "已检测到 NVIDIA GPU" : "未检测到 NVIDIA GPU" },
-    { value: "qwen", title: "本地 Qwen", text: "中文课堂更准，需要另装运行环境", aside: models.length ? qwenReady ? "已安装" : "未安装" : "" },
-    { value: "api", title: "云端 API", text: "没有显卡时用，音频会上传到转录服务", aside: keyStatus.set ? "已有 key" : "需要 key" },
+    { value: "qwen", title: "本地 Qwen", tag: "中文推荐", tip: tips.qwen, aside: models.length ? qwenReady ? "已安装" : "未安装" : "" },
+    { value: "api", title: "云端 API", text: UPLOAD_NOTICE, tip: tips.api, aside: keyStatus.set ? "已有 key" : "需要 key" },
   ] : [
-    { value: "whisper", title: "本地 Whisper", text: "在本机转录，有 NVIDIA GPU 时更快。中文课堂建议改用本地 Qwen。" },
-    { value: "qwen", title: "本地 Qwen", text: "中文课堂更准，需要另装运行环境。" },
-    { value: "api", title: "云端 API", text: "没有显卡时用，音频会上传到 OpenAI 兼容的转录服务，需要 key。" },
+    { value: "whisper", title: "本地 Whisper", tip: tips.whisper },
+    { value: "qwen", title: "本地 Qwen", tag: "中文推荐", tip: tips.qwen },
+    { value: "api", title: "云端 API", text: UPLOAD_NOTICE, tip: tips.api },
   ]);
   const modelOptions = $derived<ListOption[]>((mode === "qwen" ? models.filter((m) => m.family === "qwen")
     : models.filter((m) => m.family === "whisper")).map((m) => ({ value: m.name, label: m.name })));
@@ -153,9 +161,8 @@
       </div>
     {/if}
     <div class="field">
-      <span id="{uid}-asr-lang">默认课堂语言</span>
+      <span id="{uid}-asr-lang" title="每门课可在开始上课时单独更改">默认课堂语言</span>
       <Select labelledby="{uid}-asr-lang" options={languages} bind:value={language} />
-      <span class="field-note">{look === "rows" ? "开始上课时可以单独更改" : "每门课可在开始上课时单独更改"}</span>
     </div>
     {#if settings && mode !== "api"}
       <div class="field">

@@ -55,6 +55,11 @@ def run(no_window: bool = False) -> int:
         return 0
     try:
         return serve(directory, no_window)
+    except KeyboardInterrupt:
+        # GUI5-fix: Ctrl+C in the terminal is how `lecture gui --no-window` (or the browser-window
+        # launch) is closed: uvicorn has shut down and re-raised the signal; quit quietly. A lecture
+        # runs in its own process and goes on, as when the window closes.
+        return 0
     finally:
         (directory / "gui.json").unlink(missing_ok=True)
         lock.close()

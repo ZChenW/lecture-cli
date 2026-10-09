@@ -180,7 +180,6 @@
               <ChecksPanel bind:results={checks} bind:this={panel} onfix={fix}
                 fixText={(t) => t === "refine" ? "前往设置：课后校正" : `回到「${steps[STEPS[t]].label}」这一步`} />
               <section class="stack demo" aria-label="试运行">
-                <p class="hint">试运行用一段自造的文字走一遍完整流程，不录音；会消耗少量笔记服务 API 额度。</p>
                 {#if courses.length}
                   <div class="demo-row">
                     {#if courses.length > 1}
@@ -190,8 +189,12 @@
                           options={courses.map((c) => ({ value: c.name, label: c.name }))} />
                       </div>
                     {/if}
-                    <button type="button" class="btn" onclick={tryRun} disabled={demoRunning}>试运行一次</button>
+                    <!-- PLAN-GUI-5 R1: the explanation is the button's tooltip. -->
+                    <button type="button" class="btn" onclick={tryRun} disabled={demoRunning}
+                      title="用一段自造的文字走一遍完整流程，不录音">试运行一次</button>
                   </div>
+                  <!-- GUI5-fix: the cost is a notice, so it stays on the page. -->
+                  <p class="hint">试运行会消耗少量笔记服务 API 额度</p>
                 {:else}
                   <p class="warn-text">试运行需要至少一门课程，请回到第一步新建。</p>
                 {/if}
@@ -213,7 +216,7 @@
                 {/if}
               </section>
               {#if checks && failing}
-                <p class="hint">还有未通过的检查。可以先进入，之后在设置的「环境检查」里重新检查。</p>
+                <p class="warn-text" title="可以先跳过这一步进入，之后在设置的「环境检查」里重新检查">还有未通过的检查</p>
               {/if}
             </div>
           {/if}

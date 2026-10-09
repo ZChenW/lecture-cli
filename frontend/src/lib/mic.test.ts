@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { CELLS, cells, levelShareDb, parseEvent, resultText, watchLevel } from "./mic";
+import { CELLS, cells, levelShareDb, overloaded, parseEvent, watchLevel } from "./mic";
 
 function streamed(chunks: string[], status = 200): typeof fetch {
   return (async () => {
@@ -14,36 +14,43 @@ function streamed(chunks: string[], status = 200): typeof fetch {
   }) as unknown as typeof fetch;
 }
 
-function run(fetcher: typeof fetch, test = false) {
+function run(fetcher: typeof fetch) {
   const seen: { name: string; value?: unknown }[] = [];
   return new Promise<typeof seen>((resolve) => {
     watchLevel({
       level: (value) => seen.push({ name: "level", value }),
-      still: (value) => seen.push({ name: "still", value }),
-      result: (value) => seen.push({ name: "result", value }),
+      verdict: (value) => seen.push({ name: "verdict", value }),
       busy: () => seen.push({ name: "busy" }),
       error: (value) => seen.push({ name: "error", value }),
       end: () => resolve(seen),
-    }, { test, fetcher });
+    }, { fetcher });
   });
 }
 
 describe("level bar", () => {
-  it("spans -70 to 0 dBFS", () => {
+  it("spans -60 to 0 dBFS, linear in decibels", () => {
     expect(levelShareDb(-90)).toBe(0);
-    expect(levelShareDb(-35)).toBeCloseTo(0.5);
+    expect(levelShareDb(-60)).toBe(0);
+    expect(levelShareDb(-30)).toBeCloseTo(0.5);
+    expect(levelShareDb(-15)).toBeCloseTo(0.75);
     expect(levelShareDb(3)).toBe(1);
   });
   it("lights cells for the RMS and marks a peak above them", () => {
     expect(cells(null, null)).toEqual({ lit: 0, peak: -1 });
-    const shown = cells({ rms: -35, peak: -20 }, -14);
+    const shown = cells({ rms: -30, peak: -20 }, -14);
     expect(shown.lit).toBe(CELLS / 2);
     expect(shown.peak).toBeGreaterThan(shown.lit);
     expect(cells({ rms: -10, peak: -10 }, -40).peak).toBe(-1);  // A peak under the bar is hidden.
   });
-  it("words the test result", () => {
-    expect(resultText({ passed: true, floor: -60, peak: -20, rise: 40 })).toBe("麦克风正常：讲话时比底噪高出 40 dB");
-    expect(resultText({ passed: false, floor: -32, peak: -20.4, rise: 11.6 })).toBe("没有检测到明显的声音变化：讲话时只比底噪高出 12 dB");
+  it("is overloaded while any level of the last second clipped", () => {
+    const quiet = { rms: -40, peak: -30, clipped: false };
+    const clip = { rms: -3, peak: 0, clipped: true };
+    expect(overloaded([])).toBe(false);
+    expect(overloaded([quiet, quiet])).toBe(false);
+    expect(overloaded([quiet, clip, quiet])).toBe(true);
+    expect(overloaded([clip, ...Array(9).fill(quiet)])).toBe(true);   // ten levels: still within 1 s
+    expect(overloaded([clip, ...Array(10).fill(quiet)])).toBe(false); // eleven: it has passed
+    expect(overloaded([{ rms: -3, peak: 0 }])).toBe(false);           // an older server without the field
   });
 });
 
@@ -52,24 +59,24 @@ describe("watchLevel", () => {
     expect(parseEvent(": keepalive")).toBeNull();
     const seen = await run(streamed([
       'event: level\ndata: {"rms": -32, "pe', 'ak": -20}\n\n: keepalive\n\n',
-      'event: still\ndata: {"still": true}\n\nevent: level\ndata: {"rms": -31, "peak": -19}\n\n',
+      'event: verdict\ndata: {"verdict": "high", "text": "麦克风音量过高，开始上课时会自动调低"}\n\nevent: level\ndata: {"rms": -31, "peak": -19, "clipped": true}\n\n',
     ]));
     expect(seen).toEqual([
       { name: "level", value: { rms: -32, peak: -20 } },
-      { name: "still", value: true },
-      { name: "level", value: { rms: -31, peak: -19 } },
+      { name: "verdict", value: { verdict: "high", text: "麦克风音量过高，开始上课时会自动调低" } },
+      { name: "level", value: { rms: -31, peak: -19, clipped: true } },
     ]);
   });
-  it("asks for the test and passes its result on", async () => {
+  it("asks for the plain level stream, never a test", async () => {
     let asked = "";
-    const inner = streamed(['event: result\ndata: {"passed": false, "floor": -32, "peak": -20, "rise": 12}\n\n']);
+    const inner = streamed(['event: verdict\ndata: {"verdict": "", "text": ""}\n\n']);
     const fetcher = ((url: string, init?: RequestInit) => {
       asked = url;
       return inner(url, init);
     }) as unknown as typeof fetch;
-    const seen = await run(fetcher, true);
-    expect(asked).toBe("/api/mic/level?test=1");
-    expect(seen).toEqual([{ name: "result", value: { passed: false, floor: -32, peak: -20, rise: 12 } }]);
+    const seen = await run(fetcher);
+    expect(asked).toBe("/api/mic/level");
+    expect(seen).toEqual([{ name: "verdict", value: { verdict: "", text: "" } }]);
   });
   it("reports a refusal with the server's message", async () => {
     const fetcher = (async () => new Response(JSON.stringify({ error: { code: "busy", message: "录制进行中，不能同时测试麦克风" } }),

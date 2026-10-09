@@ -3,9 +3,8 @@
   import { api } from "../lib/api";
   import { MISSING, TARGET_LABELS } from "../lib/checks";
   import { navigate } from "../lib/router";
-  import { UPLOAD_NOTICE } from "../lib/refine";
   import {
-    FOOTER, asrRequest, cloudLine, defaultChoice, effectiveChoice, qwenModel, qwenOption, qwenState,
+    asrRequest, cloudLine, defaultChoice, effectiveChoice, qwenModel, qwenOption, qwenState,
     refineDefault, whisperModel, whisperOption, type LiveChoice,
   } from "../lib/start";
   import { app, message } from "../lib/state.svelte";
@@ -102,7 +101,7 @@
     <!-- Plan GUI-4 Q1.5: whether the microphone hears anything, before the lecture starts. -->
     <div class="line first mic">
       <span id="start-mic" class="name">麦克风</span>
-      <div class="cell meter-cell" role="group" aria-labelledby="start-mic"><MicLevel passive bind:this={meter} /></div>
+      <div class="cell meter-cell" role="group" aria-labelledby="start-mic"><MicLevel bind:this={meter} /></div>
     </div>
     <div class="line">
       <span id="start-language" class="name">语言</span>
@@ -123,15 +122,12 @@
       <!-- Cloud transcription is never refined afterwards, so the row is not offered. -->
       <div class="line last">
         <span id="start-refine" class="name">下课后</span>
-        <div class="cell">
-          <Segments labelledby="start-refine" bind:value={refine} options={[
-            { value: "on", title: "校正一遍" }, { value: "off", title: "不校正" },
-          ]} />
-          {#if refine === "on" && boot.config.refine_backend === "api"}<p class="upload">{UPLOAD_NOTICE}</p>{/if}
-        </div>
+        <!-- PLAN-GUI-5 R1: the upload notice stays in settings, where the cloud is chosen. -->
+        <Segments labelledby="start-refine" bind:value={refine} options={[
+          { value: "on", title: "校正一遍" }, { value: "off", title: "不校正" },
+        ]} />
       </div>
     {/if}
-    <p class="footer">{FOOTER}</p>
     {#if error}<p class="error-text" role="alert">{error}</p>{/if}
     {#if log}<pre class="log">{log}</pre>{/if}
     <div class="actions">
@@ -167,8 +163,6 @@
   .cloud { padding: 0 14px; font-family: var(--mono); font-size: 14px; color: #111111; overflow-wrap: anywhere; }
   .cell { display: flex; flex-direction: column; min-width: 0; }
   .meter-cell { padding: 14px 14px 12px; }
-  .upload { margin: 0 0 12px; padding: 0 14px; font-size: 12px; line-height: 1.7; color: #5C5C5A; }
-  .footer { margin: 16px 0 0; font-size: 13px; line-height: 1.7; color: #5C5C5A; }
   .missing { margin-bottom: 16px; padding: 14px 0; border-top: 1px solid var(--line); font-size: 14px; }
   .missing p { color: var(--warn); }
   .missing ul { margin: 6px 0 0; padding: 0; list-style: none; display: flex; flex-direction: column; }

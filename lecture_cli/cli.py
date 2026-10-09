@@ -35,7 +35,7 @@ from . import runs
 from . import config as settings
 from .input_level import summary as weak_input_summary
 from . import weak_spans
-from .mic_gain import restore_volume, start_volume
+from .mic_gain import remember_levels, restore_volume, start_volume
 from .refinement import UPLOAD_NOTICE as CLOUD_REFINE_UPLOAD, label as refine_label
 
 console = Console()
@@ -559,6 +559,10 @@ def session(args, config: dict, course: Path) -> int:
                 except subprocess.TimeoutExpired:
                     process.kill()
                     process.wait()
+        # PLAN-GUI-5 R2.4: only a lecture that ended normally remembers its volume for the next start
+        # calibration; a discarded one, a failed capture or a crash (never reaching here) does not.
+        if completed and not discarded and capture is not None and capture.returncode == 0:
+            remember_levels(read_json(directory / "asr-state.json"))
         # Normal end and discard alike; capture has stopped, so nothing changes the volume any more.
         if notice := restore_volume(meta.get("mic_volume_start"), read_json(directory / "asr-state.json").get("gain_volume")):
             console.print("麦克风音量：" + notice, markup=False)
@@ -774,17 +778,21 @@ def doctor(config, mic_test=False, mic_stream=None):
             console.print(f"  建议：{item.hint}", markup=False)
     failed = any(item.level == "fail" for item in results)
     if mic_test:
-        # Plan GUI-4 Q1.5: only with --mic-test does doctor open the microphone, for 5 s, levels only.
+        # Only with --mic-test does doctor open the microphone, for 5 s, levels only. PLAN-GUI-5 R2.3:
+        # the background gets the same verdict as the GUI's level bar.
         from . import mic_check
-        console.print(f"麦克风测试：请在接下来 {mic_check.TEST_SECONDS} 秒内正常说几句话…", markup=False)
+        from .mic_gain import gain_applies
+        meta = {"device": config.get("device"), "auto_gain": config.get("auto_gain", True)}
+        console.print(f"麦克风检查：听 {mic_check.LISTEN_SECONDS} 秒背景声…", markup=False)
         try:
-            result = mic_check.run_test(config.get("device"), factory=mic_stream)
+            result = mic_check.run_test(config.get("device"), factory=mic_stream, adjusts=gain_applies(meta),
+                                        volume=start_volume(meta))
         except Exception as exc:  # PortAudio missing, device gone or busy.
             console.print(f"✗ 无法打开麦克风：{exc}", markup=False)
             return 1
         for line in mic_check.describe(result):
             console.print(line, markup=False)
-        failed = failed or not result["passed"]
+        failed = failed or bool(result["verdict"])
     return 1 if failed else 0
 
 
@@ -857,7 +865,7 @@ def main(argv=None):
                              help="语音模型（lecture models 查看全部），覆盖已保存的默认值")
         if name == "doctor":
             sub.add_argument("--mic-test", action="store_true",
-                             help="另外录 5 秒测试麦克风（只看电平，不保存音频）；不加时不录音")
+                             help="另外听 5 秒背景声检查麦克风（只看电平，不保存音频）；不加时不录音")
         if name in ("start", "doctor"):
             sub.add_argument("--asr-backend", choices=["local", "api"], help="采集后端，默认 local")
             sub.add_argument("--asr-device", choices=["auto", "cuda", "cpu"], help="识别设备，默认 auto 优先 GPU")
@@ -866,7 +874,7 @@ def main(argv=None):
             sub.add_argument("--refine", action=argparse.BooleanOptionalAction, default=None,
                              help="下课后重新转录（配置 refine_backend：local 本机 Qwen，api 云端）；临时保存音频，完成后删除")
             sub.add_argument("--auto-gain", action=argparse.BooleanOptionalAction, default=None,
-                             help="自动调节 PipeWire 默认麦克风音量（削波时调低、偏弱时调回），默认启用")
+                             help="自动调节 PipeWire 默认麦克风音量（开始上课时先调好，上课中按需升降），默认启用")
             sub.add_argument("--device", help="麦克风编号或名称")
             sub.add_argument("--language", help="课堂语言，默认 en")
             sub.add_argument("--audio-file", help="使用已有音频代替麦克风")
