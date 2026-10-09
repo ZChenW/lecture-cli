@@ -2,10 +2,11 @@
 
 PLAN-GUI-5 R2 replaces the fourth round's "lower only, raise back to the start value":
 
-- R2.1, before any audio reaches recognition (GUI5-fix): 18 dB down while a short background
-  measurement clips, then straight to the volume computed from it (CALIBRATE_MARGIN under
-  BACKGROUND_TARGET), confirmed by one more measurement and corrected at most once. A volume where the
-  background met the target is the run's ceiling; an unmet target is never remembered. The audio
+- R2.1, before any audio reaches recognition (GUI5-fix, two-way since GUI5-twoway): 18 dB down while a
+  short background measurement clips, then straight to the volume computed from it (CALIBRATE_MARGIN
+  under BACKGROUND_TARGET), up or down, confirmed by one more measurement. A lowering is corrected at
+  most once; a raise that clips or goes over the target goes back to the last volume that met it. A
+  volume where the background met the target is the run's ceiling; an unmet target is never remembered. The audio
   heard meanwhile is never recognised, counted or archived.
 - R2.2, during the lecture: two consecutive 2 s clipping windows lower it by 6 dB and the ceiling
   follows. It goes up by 6 dB, never above the ceiling, once 60 s have passed since the last
@@ -59,6 +60,10 @@ CALIBRATE_MARGIN = 2.0     # dB under BACKGROUND_TARGET the computed step aims a
                            # than v³ near the target, so aiming at the target itself lands just above it)
 CALIBRATE_CORRECTIONS = 1  # computed steps after the first one, at most
 MOVED_DB = 3.0             # lowering by 6 dB or more that moves the background less than this: it is not the room
+# GUI5-twoway: the start adjustment also raises, straight to the computed volume (at most 100 %, and 6 dB
+# under any volume that clipped in this run), once; a raise that clips or goes over the target is undone.
+CALIBRATE_RAISES = 1       # raises per start adjustment
+RAISE_MIN_DB = 1.0         # a computed raise smaller than this is not worth a step
 CALIBRATING = "正在调整麦克风音量"
 # PLAN-GUI-5 R2.3: the shared verdict.
 BLOCK_SAMPLES = 1600       # 100 ms, the level bar's block
@@ -191,6 +196,7 @@ class Calibration:
     reached: bool = False  # GUI5-fix: the last measurement met BACKGROUND_TARGET without clipping
     unmoved: bool = False  # the volume went down 6 dB or more and the background did not follow
     path: tuple = ()       # (seconds since the start, volume, background dBFS, clipped) per measurement
+    backed_off: bool = False  # GUI5-twoway: a raise clipped or went over the target and was undone
 
 
 class Listener:
@@ -346,25 +352,32 @@ class MicGain:
             self.pending_clip = False  # A clipping run never spans a pause.
 
     async def calibrate(self, listen, clock=time.monotonic) -> Calibration | None:
-        """PLAN-GUI-5 R2.1 as changed by GUI5-fix, before any audio reaches recognition. listen(seconds)
-        returns that much input (Listener.listen). Starts from the volume remembered for this source when
-        there is one, then measures the background for CALIBRATE_FIRST seconds:
+        """PLAN-GUI-5 R2.1 as changed by GUI5-fix and GUI5-twoway, before any audio reaches recognition.
+        listen(seconds) returns that much input (Listener.listen). Starts from the volume remembered for
+        this source when there is one, then measures the background for CALIBRATE_FIRST seconds:
 
         - clipping: down CLIP_DROP_DB (again while it still clips);
-        - above BACKGROUND_TARGET: straight to the volume computed from the measurement (aiming
+        - above BACKGROUND_TARGET: straight down to the volume computed from the measurement (aiming
           CALIBRATE_MARGIN under the target), measured again to confirm, and corrected at most
           CALIBRATE_CORRECTIONS more times the same way;
-        - at or below it: no step (never raised here unless a clipping drop went too far).
+        - at or below it: straight up to the computed volume when that is RAISE_MIN_DB or more above,
+          at most 100 % and 6 dB under any volume that clipped, once (CALIBRATE_RAISES) and only when
+          there is time left to confirm it. When the confirming measurement clips or is over the
+          target, back to the last volume that met it (no further raise).
 
         Each step waits CALIBRATE_SETTLE and measures CALIBRATE_MEASURE seconds; never below MIN_VOLUME,
-        at most CALIBRATE_STEPS steps and not past CALIBRATE_TIMEOUT. The run's ceiling is a volume at
-        which the background met the target; when it was never met, the volume reached (R2.2 never
-        raises above it) and nothing is remembered (publish: mic_target_met). No banner."""
+        at most CALIBRATE_STEPS steps and not past CALIBRATE_TIMEOUT. A raise left unconfirmed when the
+        limits stop the run is undone too. The run's ceiling is the volume where it ended: one at which
+        the background was measured to meet the target, or, when it was never met, the volume reached
+        (R2.2 never raises above it) and nothing is remembered (publish: mic_target_met). No banner."""
         if not self.active:
             return None
         begin = clock()
-        steps = computed = 0
+        steps = computed = raised = 0
         path = []
+        good = None          # the last volume measured to meet the target
+        raising = False      # the last step was a raise, not yet confirmed
+        backed_off = False
         try:
             self.node = source_name(self.runner)
             last = remembered(self.node)
@@ -375,9 +388,26 @@ class MicGain:
             rms, clipped, levels = background(await listen(CALIBRATE_FIRST))
             path.append((clock() - begin, self.volume, rms, clipped))
             clipped_at = None  # the lowest volume that clipped: a computed step stays under it
-            while ((clipped or rms > BACKGROUND_TARGET or (clipped_at and computed == 0)) and steps < CALIBRATE_STEPS
-                   and clock() - begin < CALIBRATE_TIMEOUT):
-                if clipped:
+            while steps < CALIBRATE_STEPS and clock() - begin < CALIBRATE_TIMEOUT:
+                met = not clipped and rms <= BACKGROUND_TARGET
+                if raising and not met and good is not None:
+                    # The raise clipped or went over the target: back where it was last met, no more raises.
+                    if clipped:
+                        clipped_at = self.volume
+                    target, raised, backed_off = good, CALIBRATE_RAISES, True
+                    raising = False
+                elif met:
+                    good, raising = self.volume, False
+                    if raised >= CALIBRATE_RAISES:
+                        break
+                    if clock() - begin + CALIBRATE_SETTLE + CALIBRATE_MEASURE > CALIBRATE_TIMEOUT:
+                        break  # no time to confirm a raise: stay where the target is met
+                    target = self.volume * 10 ** ((BACKGROUND_TARGET - CALIBRATE_MARGIN - rms) / 60)
+                    target = min(target, 1.0 if clipped_at is None else clipped_at * GAIN_STEP)
+                    if target <= self.volume * 10 ** (RAISE_MIN_DB / 60):
+                        break
+                    raised, raising = raised + 1, True
+                elif clipped:
                     clipped_at = self.volume
                     target = self.volume * 10 ** (-CLIP_DROP_DB / 60)
                 else:
@@ -385,10 +415,7 @@ class MicGain:
                         break
                     computed += 1
                     target = self.volume * 10 ** ((BACKGROUND_TARGET - CALIBRATE_MARGIN - rms) / 60)
-                    if clipped_at is not None:
-                        target = min(target, clipped_at * GAIN_STEP)
-                    else:
-                        target = min(target, self.volume)
+                    target = min(target, self.volume)
                 target = max(MIN_VOLUME, min(1.0, target))
                 if abs(target - self.volume) <= 1e-6:
                     break  # at the floor (or nothing left to change)
@@ -397,25 +424,24 @@ class MicGain:
                 await listen(CALIBRATE_SETTLE)
                 rms, clipped, levels = background(await listen(CALIBRATE_MEASURE))
                 path.append((clock() - begin, self.volume, rms, clipped))
+            reached = not clipped and rms <= BACKGROUND_TARGET
+            if raising and not reached and good is not None:
+                # The limits stopped the run on an unconfirmed raise: undo it without measuring again.
+                self.set(good)
+                backed_off = True
         except VolumeError as exc:
             self.active = False
             self.notice = str(exc)
             return None
-        reached = not clipped and rms <= BACKGROUND_TARGET
-        if reached and not steps:
-            # No step was needed: the ceiling is where the background would reach the target (with the
-            # same margin as a computed step), at most 100 %.
-            ceiling = max(self.volume, min(1.0, self.volume * 10 ** ((BACKGROUND_TARGET - CALIBRATE_MARGIN - rms) / 60)))
-        else:
-            # Measured to meet the target here; or never met, so never raised above where it stopped.
-            ceiling = self.volume
-        self.ceiling = ceiling
+        # Measured to meet the target here; or never met, so never raised above where it stopped.
+        ceiling = self.ceiling = self.volume
         first = next(((v, r) for _, v, r, c in path if not c), None)
         unmoved = bool(first and 60 * math.log10(first[0] / self.volume) >= 6 and first[1] - rms < MOVED_DB)
         self.calibration = Calibration(self.volume, ceiling, round(rms, 1), clipped, steps,
                                        not reached and clock() - begin >= CALIBRATE_TIMEOUT, tuple(levels),
                                        reached, unmoved,
-                                       tuple((round(t, 3), round(v, 6), round(r, 1), c) for t, v, r, c in path))
+                                       tuple((round(t, 3), round(v, 6), round(r, 1), c) for t, v, r, c in path),
+                                       backed_off)
         self.notice = f"{self.volume:.0%} · 自动调节麦克风音量已启用"
         with self.lock:
             self.clipped = self.total = 0

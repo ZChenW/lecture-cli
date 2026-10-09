@@ -235,9 +235,10 @@ def test_backends_adjust_outside_callback_and_persist_notice(tmp_path, monkeypat
         async def produce(self):
             try:
                 if not missing:
-                    # 1 s of quiet background (-60 dBFS): nothing to lower, and none of it is recorded.
+                    # 1 s of background at the target (-46 dBFS): nothing to lower or raise (GUI5-twoway:
+                    # -60 dBFS would now be raised), and none of it is recorded.
                     for _ in range(2):
-                        self.feed(0.001)
+                        self.feed(0.005)
                     for _ in range(100):
                         if calibrated.is_set():
                             break

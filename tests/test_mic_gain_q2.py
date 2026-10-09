@@ -37,15 +37,21 @@ def lowered(fake, meta=None):
     return gain
 
 
-def calibrated(fake, volume=0.3, background=-60.0, runner=None):
-    """A gain after R2.1 with a quiet room: no step, the ceiling estimated above the volume."""
+def calibrated(fake, volume=0.3, background=-60.0, runner=None, put_back=None):
+    """A gain after R2.1 in a quiet room, then turned back down to `volume` by hand. GUI5-twoway: R2.1
+    itself now raises straight to the ceiling (measured there), so R2.2's raise only has room to work
+    after the volume went below it by other means, as here."""
     fake.volume = volume
     gain = mic_gain.MicGain(None, runner)
     level = 10 ** (background / 20)
 
     async def listen(seconds):
         return np.random.default_rng(0).standard_normal(int(seconds * 16000)) * level
-    asyncio.run(gain.calibrate(listen))
+    result = asyncio.run(gain.calibrate(listen))
+    assert result.reached and result.steps == 1 and gain.ceiling == result.volume > volume
+    (put_back or (lambda: setattr(fake, "volume", volume)))()
+    if hasattr(fake, "calls"):
+        fake.calls.clear()
     return gain
 
 
@@ -77,7 +83,7 @@ def test_two_consecutive_windows_lower_by_6_db_with_a_banner(fake_wpctl):
 
 def test_a_lowering_takes_the_ceiling_down(fake_wpctl):
     gain = calibrated(fake_wpctl)
-    assert gain.ceiling > 0.45  # GUI5-fix: estimated 2 dB under the target, 0.3 · 10^(13/60) ≈ 0.49 (was > 0.5)
+    assert gain.ceiling > 0.45  # R2.1 raised to 0.3 · 10^(13/60) ≈ 0.49 and measured it (GUI5-twoway)
     feed(gain, CLIP, 2)
     assert gain.ceiling == pytest.approx(0.3 * mic_gain.GAIN_STEP) == gain.volume
     assert not any(feed(gain, QUIET, 3 * RAISE_WINDOWS))  # never above it again
@@ -253,8 +259,8 @@ def test_two_decimal_wpctl_readings_still_reach_the_exact_ceiling():
         if command[1] == "inspect":
             return SimpleNamespace(stdout='node.name = "alsa_input.two-decimals"')
         return SimpleNamespace(stdout=f"Volume: {state['volume']:.2f}")
-    gain = calibrated(SimpleNamespace(), background=-80.0, runner=runner)
-    assert gain.ceiling == 1.0  # a quiet room: the estimate is capped at 100 %
+    gain = calibrated(SimpleNamespace(), background=-80.0, runner=runner, put_back=lambda: state.update(volume=0.5))
+    assert gain.ceiling == 1.0  # a quiet room: R2.1's raise is capped at 100 %
     for expected in (0.5 / mic_gain.GAIN_STEP, 0.5 / mic_gain.GAIN_STEP ** 2):
         feed(gain, QUIET, RAISE_WINDOWS)
         assert state["volume"] == pytest.approx(expected, abs=1e-6)

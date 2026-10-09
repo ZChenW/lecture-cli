@@ -162,13 +162,103 @@ def test_a_met_target_is_remembered_and_the_next_lecture_needs_no_step(fake_wpct
     assert room.now == pytest.approx(1.0)
 
 
-def test_a_quiet_room_needs_no_step_and_estimates_the_ceiling(fake_wpctl):
+def test_a_quiet_room_is_raised_to_the_ceiling(fake_wpctl):
+    # GUI5-twoway (was: no step, ceiling estimated at about 18.7 %). 15 % is -52.8 in the table: straight up
+    # to 15 % × 10^((-47 + 52.8) / 60) ≈ 18.7 %, confirmed there, and that measured volume is the ceiling.
     fake_wpctl.volume = 0.15
+    room = Room(fake_wpctl)
+    result = calibrate(mic_gain.MicGain(None), room)
+    assert result.steps == 1 and result.reached and not result.backed_off and room.now == pytest.approx(1.8)
+    assert sets(fake_wpctl) == [pytest.approx(0.15 * 10 ** ((-47 - room_dbfs(0.15)) / 60), abs=0.002)]
+    assert result.volume == pytest.approx(0.187, abs=0.005) and result.ceiling == result.volume
+    assert result.background == pytest.approx(room_dbfs(result.volume), abs=0.3)
+    assert result.background < -45
+
+
+@pytest.mark.parametrize("start", [0.10, 0.12, 0.15])
+def test_low_starts_are_raised_in_one_step(fake_wpctl, start):
+    # The user's case: 12 % stayed at 12 %. Each low start in the table goes straight up near -47 dBFS.
+    fake_wpctl.volume = start
+    room = Room(fake_wpctl)
+    gain = mic_gain.MicGain(None)
+    result = calibrate(gain, room)
+    assert result.steps == 1 and result.reached and room.now == pytest.approx(1.8)
+    assert result.volume > start and -48.5 < result.background < -45 and -48.5 < room_dbfs(result.volume) < -45
+    assert result.ceiling == result.volume == gain.ceiling
+    state = {}
+    gain.publish(state)
+    assert state["mic_target_met"] is True and mic_gain.remember_levels(state)
+
+
+def test_a_raise_that_goes_over_the_target_backs_off(fake_wpctl):
+    # A room twice as steep as the table above 12 %: the computed raise to about 18.6 % lands near -36 dBFS.
+    # Back to 12 %, where the target was met, and no second raise.
+    fake_wpctl.volume = 0.12
+    room = Room(fake_wpctl, dbfs=lambda volume: room_dbfs(0.12) + 120 * math.log10(volume / 0.12))
+    gain = mic_gain.MicGain(None)
+    result = calibrate(gain, room)
+    assert [round(v, 3) for _, v, _ in walk(result)] == [0.12, round(sets(fake_wpctl)[0], 3), 0.12]
+    assert walk(result)[1][2] > -45 and result.backed_off and result.reached and result.steps == 2
+    assert sets(fake_wpctl)[-1] == pytest.approx(0.12) and result.ceiling == result.volume == pytest.approx(0.12)
+    assert room.now == pytest.approx(2.6)
+
+
+def test_a_raise_that_clips_backs_off_and_the_ceiling_stays_under_it(fake_wpctl):
+    fake_wpctl.volume = 0.12
+    room = Room(fake_wpctl, clip_at=0.16)  # an input stage that clips just above 16 %
+    gain = mic_gain.MicGain(None)
+    result = calibrate(gain, room)
+    assert [c for _, _, _, c in result.path] == [False, True, False]
+    assert result.backed_off and result.reached and result.volume == pytest.approx(0.12) == gain.ceiling
+    # R2.2 never raises past it either: the ceiling is the volume that met the target.
+    assert gain.ceiling < 0.16
+
+
+def test_a_raise_left_unconfirmed_is_undone_and_not_remembered(fake_wpctl):
+    # The settling listen takes far longer than asked (a stalled device): the 6 s are up before the
+    # raise is confirmed and its measurement is over the target. Back to the volume that met it, without
+    # measuring again; not met at the end, so nothing is remembered.
+    fake_wpctl.volume = 0.12
+    room = Room(fake_wpctl, dbfs=lambda volume: room_dbfs(0.12) + 120 * math.log10(volume / 0.12))
+    real = room.listen
+
+    async def slow(seconds):
+        if seconds == mic_gain.CALIBRATE_SETTLE:
+            room.now += 5.0
+        return await real(seconds)
+    gain = mic_gain.MicGain(None)
+    result = asyncio.run(gain.calibrate(slow, room.clock))
+    assert result.steps == 1 and result.backed_off and not result.reached and result.timed_out
+    assert sets(fake_wpctl)[-1] == pytest.approx(0.12) and fake_wpctl.volume == pytest.approx(0.12)
+    assert result.volume == result.ceiling == pytest.approx(0.12) and len(result.path) == 2
+    state = {}
+    gain.publish(state)
+    assert state["mic_target_met"] is False and mic_gain.remember_levels(state) is False
+
+
+def test_no_raise_without_time_to_confirm_it(fake_wpctl, monkeypatch):
+    monkeypatch.setattr(mic_gain, "CALIBRATE_TIMEOUT", 1.5)
+    fake_wpctl.volume = 0.12
     result = calibrate(mic_gain.MicGain(None), Room(fake_wpctl))
-    assert result.steps == 0 and sets(fake_wpctl) == [] and result.volume == 0.15 and result.reached
-    # Where the background would reach 2 dB under -45: about 18.7 %, which the table puts at -46.7.
-    assert result.ceiling == pytest.approx(0.15 * 10 ** ((-47 - result.background) / 60), abs=1e-3)  # background is rounded
-    assert result.ceiling == pytest.approx(0.187, abs=0.005) and room_dbfs(result.ceiling) < -45
+    assert result.steps == 0 and sets(fake_wpctl) == [] and result.reached and result.ceiling == 0.12
+
+
+def test_a_small_raise_is_not_worth_a_step(fake_wpctl):
+    # Under 1 dB (RAISE_MIN_DB) below the computed volume: met, no step.
+    fake_wpctl.volume = 0.18  # about -46.3 in the table, -47 is 0.7 dB higher
+    result = calibrate(mic_gain.MicGain(None), Room(fake_wpctl))
+    assert result.steps == 0 and sets(fake_wpctl) == [] and result.reached and result.ceiling == 0.18
+
+
+def test_a_remembered_low_volume_is_still_the_start_and_is_raised(fake_wpctl):
+    # The last lecture ended at 12 % in a louder room; this one starts there (not at the system 100 %),
+    # finds the background well under the target and raises in one step.
+    assert mic_gain.remember("alsa_input.fake-test-mic", 0.12, 0.12)
+    fake_wpctl.volume = 1.0
+    room = Room(fake_wpctl)
+    result = calibrate(mic_gain.MicGain(None), room)
+    assert sets(fake_wpctl)[0] == pytest.approx(0.12) and walk(result)[0][1] == pytest.approx(0.12)
+    assert result.steps == 1 and result.reached and 0.18 < result.volume < 0.2 and room.now == pytest.approx(1.8)
 
 
 def test_the_10_percent_floor_and_a_dead_microphone(fake_wpctl):
@@ -231,8 +321,9 @@ def test_a_calibration_cut_short_says_nothing(fake_wpctl, monkeypatch):
 def test_the_remembered_volume_is_only_for_its_own_source(fake_wpctl):
     assert mic_gain.remember("alsa_input.other-mic", 0.3, 0.3)
     fake_wpctl.volume = 0.15
-    calibrate(mic_gain.MicGain(None), Room(fake_wpctl))
-    assert sets(fake_wpctl) == []
+    result = calibrate(mic_gain.MicGain(None), Room(fake_wpctl))
+    # GUI5-twoway: 15 % is now raised, but measured from 15 % first (was: no set-volume at all).
+    assert walk(result)[0][1] == 0.15 and 0.3 not in sets(fake_wpctl)
 
 
 def test_an_unreadable_levels_file_starts_from_the_current_volume(fake_wpctl):
@@ -243,7 +334,8 @@ def test_an_unreadable_levels_file_starts_from_the_current_volume(fake_wpctl):
         path.write_text(broken)
         fake_wpctl.volume, fake_wpctl.calls = 0.15, []
         result = calibrate(mic_gain.MicGain(None), Room(fake_wpctl))
-        assert sets(fake_wpctl) == [] and result.volume == 0.15
+        # GUI5-twoway: measured from 15 % and raised from there (was: no set-volume, volume 0.15).
+        assert walk(result)[0][1] == 0.15 and len(sets(fake_wpctl)) == 1
 
 
 def test_without_wpctl_or_muted_nothing_is_calibrated(fake_wpctl, monkeypatch):
