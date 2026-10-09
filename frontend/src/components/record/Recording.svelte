@@ -1,6 +1,6 @@
 <script lang="ts">
   import { formatElapsed, weakLabel } from "../../lib/format";
-  import { BACKLOG_WARN_SECONDS, closingHint, destinationLine, gainState, micPercent, recordingState } from "../../lib/record";
+  import { BACKLOG_WARN_SECONDS, closingHint, destinationLine, gainState, recordingState, systemVolume } from "../../lib/record";
   import type { Snapshot } from "../../lib/types";
   import NotesCard from "./NotesCard.svelte";
   import StateLabel from "./StateLabel.svelte";
@@ -45,7 +45,8 @@
     </div>
     <div class="stat">
       <span class="key">麦克风音量</span>
-      <span class="value" class:warn={weak}>{micPercent(snapshot.asr.level)}</span>
+      <!-- GUI5-fix: the system volume, not the live level (the waveform shows that). -->
+      <span class="value" class:warn={weak}>{systemVolume(snapshot.asr) || "—"}</span>
       <!-- Plan N3.4: weak input turns the cell to the warning colour; the full text is the tooltip. -->
       {#if weak}<span class="sub warn" title={weak}>{weakLabel(weak)}<span class="visually-hidden">：{weak}</span></span>
       <!-- The automatic volume notice, formerly a banner (plan N2.5); its full text is the tooltip. -->

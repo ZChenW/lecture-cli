@@ -191,8 +191,10 @@
                     {/if}
                     <!-- PLAN-GUI-5 R1: the explanation is the button's tooltip. -->
                     <button type="button" class="btn" onclick={tryRun} disabled={demoRunning}
-                      title="用一段自造的文字走一遍完整流程，不录音；会消耗少量笔记服务 API 额度">试运行一次</button>
+                      title="用一段自造的文字走一遍完整流程，不录音">试运行一次</button>
                   </div>
+                  <!-- GUI5-fix: the cost is a notice, so it stays on the page. -->
+                  <p class="hint">试运行会消耗少量笔记服务 API 额度</p>
                 {:else}
                   <p class="warn-text">试运行需要至少一门课程，请回到第一步新建。</p>
                 {/if}

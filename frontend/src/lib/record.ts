@@ -108,10 +108,6 @@ export function updatedAgo(updated: number | null, now: number): string {
   return minutes < 1 ? "刚刚更新" : `${minutes} 分钟前更新`;
 }
 
-export function micPercent(level: number): string {
-  return `${Math.round(levelShare(level) * 100)}%`;
-}
-
 /** "编写详细笔记 2/7" → 2/7; text without a fraction has no progress bar. */
 export function progressOf(status: string | null | undefined): { done: number; total: number } | null {
   const match = status?.match(/(\d+)\s*\/\s*(\d+)/);
@@ -176,17 +172,21 @@ export interface GainState { cell: string; detail: string; warn: boolean }
 /**
  * The automatic mic volume notice (lecture_cli/mic_gain.py) belongs in the mic cell, not a banner:
  * "自动调节开" while it works, "自动调节关" when it could not start. Only a muted microphone or one
- * already at the volume floor is a warning. PLAN-GUI-5 R2.1: once the opening adjustment is done the
- * cell says the volume it keeps, e.g. "22% · 自动".
+ * already at the volume floor is a warning. GUI5-fix: once the opening adjustment is done the cell's
+ * main value is the system volume (systemVolume) and this line just says "自动".
  */
 export function gainState(asr: Snapshot["asr"]): GainState | null {
   const text = asr.notices.find((notice) => notice.kind === "gain")?.text ?? "";
   if (!text) return null;
   if (/静音|下限/.test(text)) return { cell: "自动调节开", detail: text, warn: true };
   if (/未启用|失败|无法读取|已停止/.test(text)) return { cell: "自动调节关", detail: text, warn: false };
+  return { cell: systemVolume(asr) ? "自动" : "自动调节开", detail: text, warn: false };
+}
+
+/** GUI5-fix: the bottom bar's "麦克风音量" is the system volume ("32%"), "—" while it is not known. */
+export function systemVolume(asr: Pick<Snapshot["asr"], "mic_volume">): string {
   const volume = asr.mic_volume;
-  const cell = volume != null && Number.isFinite(volume) ? `${Math.round(volume * 100)}% · 自动` : "自动调节开";
-  return { cell, detail: text, warn: false };
+  return volume != null && Number.isFinite(volume) ? `${Math.round(volume * 100)}%` : "";
 }
 
 /** PLAN-GUI-5 R2.1: the capture process's status while it sets the volume, before anything is recorded. */
